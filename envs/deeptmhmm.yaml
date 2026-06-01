@@ -1,0 +1,15 @@
+name: deeptmhmm
+channels:
+  - pytorch
+  - conda-forge
+  - bioconda
+  - defaults
+dependencies:
+  - python=3.10
+  - pytorch::pytorch
+  - biopython>=1.80
+  - pandas
+  - numpy
+  - pip
+  - pip:
+    - pybiolib          

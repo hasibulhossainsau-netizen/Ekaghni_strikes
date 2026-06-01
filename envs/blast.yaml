@@ -1,0 +1,11 @@
+name: blast
+channels:
+  - conda-forge         
+  - bioconda
+  - defaults
+dependencies:
+  - python=3.10
+  - blast>=2.12.0
+  - biopython=1.81      
+  - pyyaml
+  - pandas

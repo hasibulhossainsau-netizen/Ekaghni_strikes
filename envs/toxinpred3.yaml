@@ -1,0 +1,12 @@
+name: toxinpred3
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - python=3.10
+  - pandas
+  - scikit-learn=1.2.2  
+  - biopython
+  - pip
+  - pip:
+      - toxinpred3

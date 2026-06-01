@@ -1,0 +1,15 @@
+name: venusvaccine
+channels:
+  - pytorch
+  - conda-forge
+  - bioconda
+  - defaults
+dependencies:
+  - python=3.10
+  - pytorch::pytorch       
+  - pip
+  - pip:
+    - transformers
+    - biopython
+    - pandas
+    - scikit-learn

@@ -1,0 +1,62 @@
+# =============================================================================
+# 1. SNAKEMAKE, SYSTEMS & IDE CACHING
+# =============================================================================
+.snakemake/
+.ipynb_checkpoints/
+__pycache__/
+*.pyc
+*.pyo
+.DS_Store
+Thumbs.db
+
+# =============================================================================
+# 2. PIPELINE RUN LOGS
+# =============================================================================
+logs/
+*.log
+
+# =============================================================================
+# 3. DATA DIRECTORIES (Heavy Inputs, Databases & PDBs)
+# =============================================================================
+# Ignore all sub-folders in data/ but keep the main directory structured
+data/fasta/
+data/fasta_cleaned/
+data/protein/
+data/align/
+data/blast/
+
+# Explicitly ignore heavy structural files and local BLAST databases
+data/MHC_I/
+data/reference/
+
+# Specific structural extensions to block inside data
+data/**/*.pdb
+data/**/*.pdbqt
+data/**/*.trg
+
+# =============================================================================
+# 4. PIPELINE RESULTS (Bulk Output Files)
+# =============================================================================
+# Ignoring intermediate tool outputs
+results/bcell/
+results/consensus/
+results/filtering/
+results/immunogenicity/
+results/safety/
+results/topology/
+results/vaccine_construct/
+
+# Specially ignoring molecular docking loops (which generated 40+ PDBs/OUTs)
+results/docking/
+
+# Global safety check for large formats in results
+results/**/*.pdb
+results/**/*.out
+
+# =============================================================================
+# 5. EXTERNAL TOOLS & DEPENDENCIES
+# =============================================================================
+# BepiPred 3.0 scripts and heavy ESM embeddings/models should not be tracked
+tools/
+*.zip
+*.pt

@@ -1,0 +1,10 @@
+name: alignment
+channels:
+  - conda-forge
+  - bioconda
+  - defaults
+dependencies:
+  - python=3.10
+  - mafft>=7.500
+  - biopython>=1.80
+  - pandas            

@@ -1,0 +1,8 @@
+name: netmhcpan
+channels:
+  - conda-forge
+dependencies:
+  - python=3.10
+  - pandas
+  - numpy
+  - biopython>=1.80

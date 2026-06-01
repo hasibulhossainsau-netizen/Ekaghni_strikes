@@ -1,0 +1,12 @@
+# Canine DLA (Major Histocompatibility Complex) alleles
+# Format: allele_name  frequency
+# Frequencies are approximate population averages
+
+DLA-8803401	0.25
+DLA-8850101	0.20
+DLA-8850801	0.18
+DLA-88	0.12
+DLA-12	0.10
+DLA-96	0.08
+DLA-64	0.04
+DLA-20	0.03

@@ -1,0 +1,289 @@
+# ==========================================================
+# VACDES PIPELINE CONFIG v0.1.0 
+# ==========================================================
+
+project:
+  name: "CPV2_Vaccine_Design"
+  version: "0.3.0"
+  organism: "Canine parvovirus type 2"
+  host: "Canis lupus familiaris"
+
+# ==========================================================
+# PATHS (Using relative paths for cross-machine portability)
+# ==========================================================
+paths:
+  root: "."
+  data: "data"
+  raw_genomes: "data/fasta"          
+  proteins: "data/protein"           
+  alignment: "data/align"            
+  blast: "data/blast"                
+  epitopes: "results/epitopes"       
+  structures: "results/structures"
+  docking: "results/docking"          
+  mhc_structures: "data/MHC_I"       
+  md: "results/md"
+  reports: "results/reports"
+  logs: "logs"
+  scripts: "scripts"                 
+  env: "envs"                        
+
+# ==========================================================
+# SAMPLES (Input genome FASTA list, without extension)
+# ==========================================================
+samples:
+  - FJ197845
+  - PV611245
+  - PV611246
+  - PV611247
+
+# ==========================================================
+# INPUT REFERENCES
+# ==========================================================
+reference:
+  genome: "data/reference/FJ197845.fasta"   
+  vp2_gene:
+    start: 2771
+    end: 4535
+
+# ==========================================================
+# SEQUENCE EXTRACTION (vp2_extract.py)
+# ==========================================================
+sequence_extraction:
+  enabled: true
+  method: "blastn"
+  evalue: 1e-5
+  min_identity: 90
+  keep_reverse_complement: true
+
+# ==========================================================
+# MULTIPLE SEQUENCE ALIGNMENT (MAFFT)
+# ==========================================================
+alignment:
+  tool: "mafft"
+  mode: "--linsi"          
+  maxiterate: 1000
+  threads: 4               
+  gap_penalty: 1.53
+
+# ==========================================================
+# CONSERVATION ANALYSIS (calculate_conservation.py)
+# ==========================================================
+conservation:
+  enabled: true
+  min_conservation_percent: 95
+  min_region_length: 8
+  remove_gap_columns: true
+  metrics:
+    - shannon_entropy
+    - residue_frequency
+    - variability_index
+
+# ==========================================================
+# BLASTp HOST HOMOLOGY FILTER (vp2_blastp.py)
+# ==========================================================
+host_homology:
+  enabled: true
+  database: "dog_proteome"
+  thresholds:
+    identity: 80                  
+    coverage: 70                  
+    evalue: 1e-3
+  remove_host_hits: true
+
+# ==========================================================
+# T-CELL EPITOPE PREDICTION: MHC Class I Binding (NetMHCpan)
+# ==========================================================
+tcell_epitope:
+  enabled: true
+  predictor:
+    tool: "NetMHCpan"
+    version: "4.1"
+  peptide_lengths: [8, 9, 10, 11]
+  
+  dla_alleles:
+    - "DLA-8803401"    
+    - "DLA-8850101"    
+    - "DLA-8850801"    
+    - "DLA"         
+  
+  thresholds:
+    strong_binder_rank: 0.5    
+    weak_binder_rank: 2.0
+  
+  netmhcpan_path: "~/netMHCpan-4.1/netMHCpan"
+
+# ==========================================================
+# IEDB MHC Class II Binding Predictions
+# ==========================================================
+mhc2_epitope:
+  enabled: true
+  method: "nn_align"               
+  lengths: [15]                    
+  
+  dla_mhc2_alleles:
+    - "HLA-DRB1*01:01"             
+    - "HLA-DRB1*04:01"             
+    - "HLA-DRB1*11:01"             
+  
+  thresholds:
+    strong_binder_percentile: 1.0  
+    weak_binder_percentile: 5.0
+
+# ==========================================================
+# IEDB MHC Class I Antigen Processing
+# ==========================================================
+mhc1_processing:
+  enabled: true
+  method: "recommended"            
+  proteasome: "immuno"             
+  
+  dla_mhc1_alleles:
+    - "HLA-A*02:01"                
+    - "HLA-B*07:02"                
+    - "HLA-A*11:01"                
+
+# ==========================================================
+# ENSEMBLE IMMUNOGENICITY SCORING (v2.4)
+# ==========================================================
+ensemble:
+  enabled: true
+  weight_mhc2: 0.40               
+  weight_processing: 0.35         
+  weight_population_coverage: 0.25 
+  normalization: "minmax"          
+  breed_weights_file: "config/breed_weights.csv"  
+  use_breed_specificity: true
+  target_breeds:
+    - "Labrador"
+    - "German_Shepherd"
+    - "Mixed"
+    - "All_Breeds"
+
+# ==========================================================
+# B-CELL EPITOPE PREDICTION (BepiPred 3.0)
+# ==========================================================
+bcell_epitope:
+  enabled: true
+  script_path: "tools/bepipred/BepiPred3_src/bepipred3_CLI.py"
+  prediction_mode: "vt_pred"       
+  threshold: 0.1512                
+  rolling_window_size: 9           
+  top_pct_cands: 20                
+
+# ==========================================================
+# MODULAR PEPTIDE-PROTEIN MOLECULAR DOCKING SWITCH INTERFACE
+# ==========================================================
+docking:
+  tool: "hpepdock"                 # Toggle option: "hpepdock" OR "adcp"
+  receptors:
+    - "5F1I"
+    - "7CJQ"
+
+  # Settings used if tool: "hpepdock"
+  server_url: "http://huanglab.phys.hust.edu.cn/hpepdock/runhpepdock.php"
+  email: "your_email@example.com"
+  max_retries: 3
+  timeout_seconds: 180
+
+  # Settings used if tool: "adcp"
+  adfr_suite_path: "/home/YOUR_USERNAME/ADFRsuite_x86_64Linux_1.1dev/ADFRsuite-1.1dev/bin"
+  grid_padding: 4.0
+  replicas: 40
+  steps: 1000000
+  threads: 4
+
+# ==========================================================
+# SAFETY FILTERS
+# ==========================================================
+toxicity:
+  enabled: true
+  tool: "ToxinPred3"
+  remove_toxic_peptides: true
+  threshold: 0.5
+
+allergenicity:
+  enabled: true
+  tools:
+    - "AlgPred2"
+  remove_allergens: true
+  threshold: 0.5
+
+# ==========================================================
+# STRUCTURAL ACCESSIBILITY & TOPOLOGY
+# ==========================================================
+structure_analysis:
+  enabled: true
+  secondary_structure:
+    tool: "PSIPRED"
+  solvent_accessibility:
+    tool: "NetSurfP"
+  transmembrane_filter:
+    tool: "DeepTMHMM"
+  keep_surface_exposed_only: true
+
+# ==========================================================
+# MULTI-CRITERIA EPITOPE PRIORITIZATION WEIGHTS
+# ==========================================================
+ranking:
+  weights:
+    mhc_binding: 0.25            
+    mhc2_binding: 0.20           
+    processing_efficiency: 0.10  
+    conservation: 0.15           
+    immunogenicity: 0.20         
+    safety: 0.10                 
+
+# ==========================================================
+# REPORTING & VISUALIZATION
+# ==========================================================
+reporting:
+  save_csv: true
+  save_json: true
+  save_html: false
+  plots:
+    - mhc2_score_distribution
+    - processing_score_ranking
+    - ensemble_score_ranking
+    - population_coverage_comparison
+
+# ==========================================================
+# PIPELINE EXECUTION (Snakemake settings)
+# ==========================================================
+execution:
+  workflow_manager: "snakemake"
+  reproducibility:
+    save_versions: true
+    save_command_logs: true
+    random_seed: 42
+  parallel:
+    enabled: true
+    max_threads: 4
+
+# ==========================================================
+# ENVIRONMENT & TOOLS
+# ==========================================================
+environment:
+  python: "3.10"
+  required_tools:
+    - mafft              
+    - blast+             
+    - netmhcpan          
+    - deeptmhmm          
+    - pandas             
+    - numpy              
+    - requests           
+
+# ==========================================================
+# QUALITY CONTROL
+# ==========================================================
+qc:
+  enabled: true
+  checks:
+    - duplicate_sequences
+    - empty_sequences
+    - invalid_amino_acids
+    - alignment_length_consistency
+    - fasta_header_validation
+    - iedb_score_validity
+    - ensemble_score_validity
