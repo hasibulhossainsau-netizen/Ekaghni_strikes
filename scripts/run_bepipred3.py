@@ -10,7 +10,12 @@ from pathlib import Path
 
 from Bio import SeqIO
 
-from pipeline_config import configured_tool_if_available, load_config, resolve_path
+from pipeline_config import (
+    configured_tool_if_available,
+    deterministic_score,
+    load_config,
+    resolve_path,
+)
 
 
 OUTPUT_FASTAS = (
@@ -34,12 +39,21 @@ def write_mock_predictions(records, output_dir):
         for record in records:
             sequence = str(record.seq).upper()
             positive_count = min(len(sequence), max(1, math.ceil(len(sequence) * 0.2)))
+            scores = [
+                deterministic_score(f"{record.id}:{index}:{residue}", 0.05, 0.95)
+                for index, residue in enumerate(sequence)
+            ]
+            selected_positions = set(
+                sorted(range(len(sequence)), key=scores.__getitem__, reverse=True)[:positive_count]
+            )
             for index in range(len(sequence)):
-                score = 0.9 if index < positive_count else 0.1
+                score = scores[index]
                 writer.writerow({
                     "Accession": record.id,
                     "BepiPred-3.0 score": score,
-                    "BepiPred-3.0 linear epitope score": score,
+                    "BepiPred-3.0 linear epitope score": (
+                        score if index in selected_positions else score * 0.5
+                    ),
                 })
 
     all_predictions = []
@@ -47,7 +61,17 @@ def write_mock_predictions(records, output_dir):
     for record in records:
         sequence = str(record.seq).upper()
         positive_count = min(len(sequence), max(1, math.ceil(len(sequence) * 0.2)))
-        selected = sequence[:positive_count].upper() + sequence[positive_count:].lower()
+        scores = [
+            deterministic_score(f"{record.id}:{index}:{residue}", 0.05, 0.95)
+            for index, residue in enumerate(sequence)
+        ]
+        selected_positions = set(
+            sorted(range(len(sequence)), key=scores.__getitem__, reverse=True)[:positive_count]
+        )
+        selected = "".join(
+            residue if index in selected_positions else residue.lower()
+            for index, residue in enumerate(sequence)
+        )
         all_predictions.append(f">{record.id}\n{sequence}\n")
         selected_predictions.append(f">{record.id}\n{selected}\n")
 

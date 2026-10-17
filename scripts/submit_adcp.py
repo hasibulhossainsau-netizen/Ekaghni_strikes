@@ -5,7 +5,13 @@ import argparse
 import subprocess
 import pandas as pd
 import shutil
-from pipeline_config import configured_tool_if_available, load_config, resolve_path
+from pipeline_config import (
+    configured_tool_if_available,
+    deterministic_score,
+    load_config,
+    require_columns,
+    resolve_path,
+)
 
 def parse_arguments():
     parser = argparse.ArgumentParser(description="Automated High-Throughput Batch Screening via ADCP")
@@ -113,8 +119,8 @@ def main():
     # 2. Load the pipeline-generated epitopes
     try:
         df = pd.read_csv(args.csv)
-        seq_col = [col for col in df.columns if col.lower() in ['sequence', 'peptide', 'epitope']][0]
-        epitopes = df[seq_col].dropna().unique().tolist()[
+        require_columns(df, ("peptide",), "ADCP candidate table")
+        epitopes = df["peptide"].dropna().unique().tolist()[
             :config["docking"]["max_epitopes"]
         ]
         print(f"[+] Loaded {len(epitopes)} unique target epitopes for screening.")
@@ -166,7 +172,9 @@ def main():
                 summary_results.append({
                     "Receptor": receptor_id,
                     "Peptide": pep,
-                    "Affinity_Score": -1.0,
+                    "Affinity_Score": round(
+                        -10 - deterministic_score(f"{receptor_id}:{pep}", 0, 40), 3
+                    ),
                     "Status": "Mocked"
                 })
                 continue
@@ -218,7 +226,9 @@ def main():
                 summary_results.append({
                     "Receptor": receptor_id,
                     "Peptide": pep,
-                    "Affinity_Score": -1.0,
+                    "Affinity_Score": round(
+                        -10 - deterministic_score(f"{receptor_id}:{pep}", 0, 40), 3
+                    ),
                     "Status": "Mocked"
                 })
                 

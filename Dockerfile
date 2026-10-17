@@ -54,7 +54,8 @@ COPY Makefile README.md Snakefile config.yaml ./
 COPY config/ ./config/
 COPY envs/ ./envs/
 COPY scripts/ ./scripts/
+COPY tests/ ./tests/
 COPY data/fasta/test_sample.fasta ./data/fasta/test_sample.fasta
 
 ENTRYPOINT ["/usr/bin/tini", "--"]
-CMD ["make", "smoke-test", "mock-test"]
+CMD ["make", "smoke-test", "test", "mock-test"]

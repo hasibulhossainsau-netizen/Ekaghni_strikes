@@ -4,7 +4,32 @@ import json
 import pandas as pd
 from pathlib import Path
 import sys
-from pipeline_config import load_config, resolve_path
+from pipeline_config import load_config, require_columns, resolve_path
+
+
+BLAST_COLUMNS = (
+    "qseqid", "sseqid", "pident", "length", "qstart", "qend", "evalue", "qcovs"
+)
+
+
+def filter_blast_hits(blast_df, thresholds):
+    """Return unique query regions meeting all configured host-hit thresholds."""
+    require_columns(blast_df, BLAST_COLUMNS, "BLAST tabular results")
+    high_hits = blast_df[
+        (blast_df["pident"] >= thresholds["identity"])
+        & (blast_df["qcovs"] >= thresholds["coverage"])
+        & (blast_df["evalue"] <= thresholds["evalue"])
+    ]
+    results = pd.DataFrame({
+        "protein_id": high_hits["qseqid"].astype(str).str.strip(),
+        "host_match": high_hits["sseqid"].astype(str).str.strip(),
+        "identity": high_hits["pident"].astype(float).round(2),
+        "query_coverage": high_hits["qcovs"].astype(float).round(2),
+        "evalue": high_hits["evalue"].astype(float),
+        "qstart": high_hits["qstart"].astype(int),
+        "qend": high_hits["qend"].astype(int),
+    })
+    return results.drop_duplicates(subset=["protein_id", "qstart", "qend"])
 
 def main():
     parser = argparse.ArgumentParser()
@@ -21,39 +46,18 @@ def main():
 
     blacklisted_positions = []
     scanned_files_count = 0
-    blast_cols = [
-        'qseqid', 'sseqid', 'pident', 'length', 'qstart', 'qend', 'evalue', 'qcovs'
-    ]
-
     for file_path in args.inputs:
         path = Path(file_path)
         if not path.exists() or path.stat().st_size == 0:
             continue
             
         scanned_files_count += 1
-        try:
-            df = pd.read_csv(path, sep="\t", header=None, names=blast_cols)
-            if df.empty:
-                continue
-
-            high_hits = df[
-                (df['pident'] >= thresholds["identity"]) &
-                (df['qcovs'] >= thresholds["coverage"]) &
-                (df['evalue'] <= thresholds["evalue"])
-            ]
-            
-            for _, row in high_hits.iterrows():
-                blacklisted_positions.append({
-                    "protein_id": str(row['qseqid']).strip(),
-                    "host_match": str(row['sseqid']).strip(),
-                    "identity": round(float(row['pident']), 2),
-                    "query_coverage": round(float(row['qcovs']), 2),
-                    "evalue": float(row['evalue']),
-                    "qstart": int(row['qstart']),
-                    "qend": int(row['qend'])
-                })
-        except Exception as e:
-            print(f"[WARNING] Crash in {path.name}: {str(e)}", file=sys.stderr)
+        df = pd.read_csv(path, sep="\t", header=None, names=BLAST_COLUMNS)
+        if df.empty:
+            continue
+        blacklisted_positions.extend(
+            filter_blast_hits(df, thresholds).to_dict(orient="records")
+        )
 
     if blacklisted_positions:
         df_out = pd.DataFrame(blacklisted_positions)

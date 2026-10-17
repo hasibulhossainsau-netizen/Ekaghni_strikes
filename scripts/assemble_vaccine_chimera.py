@@ -3,7 +3,7 @@ import argparse
 import pandas as pd
 import os
 import sys
-from pipeline_config import load_config, resolve_path
+from pipeline_config import load_config, require_columns, resolve_path
 
 def parse_args():
     parser = argparse.ArgumentParser(
@@ -17,40 +17,14 @@ def parse_args():
     parser.add_argument("--config", default=None, help="Path to pipeline config.yaml")
     return parser.parse_args()
 
-def get_peptide_list(df, max_count):
+def get_peptide_list(df, peptide_column, max_count, source):
     """
-    Extracts valid amino acid sequence strings based on exact case-insensitive matches.
-    Defensively strips out structural IDs, metadata rows, and header artifacts.
+    Extract valid unique amino acid sequences from the pipeline's explicit schema.
     """
+    require_columns(df, (peptide_column,), source)
     if df.empty:
         return []
-    
-    # Map headers to lowercase to handle casing variants (e.g., 'Peptide' vs 'peptide')
-    col_mapping = {col.lower(): col for col in df.columns}
-    chosen_col = None
-
-    # Explicitly check for preferred sequence tracking targets
-    for target in ["peptide", "sequence", "seq", "epitope"]:
-        if target in col_mapping:
-            chosen_col = col_mapping[target]
-            break
-
-    # Robust fallback: find the first column that resembles valid uppercase peptide letters
-    if not chosen_col:
-        for col in df.columns:
-            sample = df[col].dropna().astype(str).str.strip().iloc[:3]
-            # Skip columns that contain metadata markers like underscores, dots, or numerals
-            if any("_" in s or "." in s or any(char.isdigit() for char in s) for s in sample):
-                continue
-            chosen_col = col
-            break
-
-    if not chosen_col:
-        print("[WARN] Could not strictly isolate a pure sequence column. Defaulting to first column.")
-        chosen_col = df.columns[0]
-
-    # Extract clean, uppercase, unique sequence strings
-    raw_list = df[chosen_col].dropna().astype(str).str.upper().str.strip().unique()
+    raw_list = df[peptide_column].dropna().astype(str).str.upper().str.strip().unique()
     clean_peptides = []
     
     for pep in raw_list:
@@ -72,14 +46,16 @@ def main():
     max_epitopes = construct["max_epitopes_per_class"]
 
     print("[PROCESSING] Loading filtered consensus epitope datasets...")
+    overlapping_df = pd.read_csv(args.intersected)
+    require_columns(overlapping_df, ("start", "end", "length"), "overlapping consensus regions")
     mhc1_df = pd.read_csv(args.mhc1)
     mhc2_df = pd.read_csv(args.mhc2)
     bcell_df = pd.read_csv(args.bcell)
 
     # Extract sequence collections cleanly
-    mhc1_peps = get_peptide_list(mhc1_df, max_count=max_epitopes)
-    mhc2_peps = get_peptide_list(mhc2_df, max_count=max_epitopes)
-    bcell_peps = get_peptide_list(bcell_df, max_count=max_epitopes)
+    mhc1_peps = get_peptide_list(mhc1_df, "peptide", max_epitopes, "MHC-I candidates")
+    mhc2_peps = get_peptide_list(mhc2_df, "peptide", max_epitopes, "MHC-II candidates")
+    bcell_peps = get_peptide_list(bcell_df, "Peptide", max_epitopes, "B-cell candidates")
 
     print(f"[INFO] Parsed MHC-I Epitopes:  {mhc1_peps}")
     print(f"[INFO] Parsed MHC-II Epitopes: {mhc2_peps}")

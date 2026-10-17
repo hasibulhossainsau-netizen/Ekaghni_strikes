@@ -1,0 +1,9 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it using the metadata below."
+title: "Ekaghni_strikes: CPV-2 Canine Vaccine Design Pipeline"
+type: software
+authors:
+  - name: "Ekaghni_strikes contributors"
+version: 0.3.0
+license: MIT
+repository-code: "https://github.com/hasibulhossainsau-netizen/Ekaghni_strikes"

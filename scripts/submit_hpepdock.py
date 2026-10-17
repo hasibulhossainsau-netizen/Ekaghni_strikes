@@ -4,7 +4,7 @@ import time
 import argparse
 import pandas as pd
 import requests
-from pipeline_config import load_config, resolve_path
+from pipeline_config import load_config, require_columns, resolve_path
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Submit validated pipeline epitopes to HPEPDOCK server with resume support.")
@@ -96,22 +96,24 @@ def main():
     existing_records = []
     
     if os.path.exists(args.output) and os.path.getsize(args.output) > 0:
-        try:
-            old_df = pd.read_csv(args.output)
-            # Filter to find rows that genuinely succeeded
-            success_df = old_df[old_df['Status'].str.strip().str.lower() == 'submitted']
-            for _, row in success_df.iterrows():
-                # Store structural key tuple as state tracker
-                completed_jobs.add((str(row['Receptor']).strip(), str(row['Peptide']).strip()))
-            
-            # Keep track of everything else to append safely or reconstruct
-            existing_records = old_df.to_dict(orient='records')
-            print(f"State recovery found: Loaded {len(completed_jobs)} jobs previously 'Submitted'. These will be skipped.")
-        except Exception as e:
-            print(f"Could not parse existing tracking file due to formatting, starting crisp execution log. Detail: {e}")
+        old_df = pd.read_csv(args.output)
+        require_columns(
+            old_df, ("Status", "Receptor", "Peptide"),
+            "existing HPepDock tracking table",
+        )
+        success_df = old_df[old_df["Status"].str.strip().str.lower() == "submitted"]
+        for _, row in success_df.iterrows():
+            completed_jobs.add((str(row["Receptor"]).strip(), str(row["Peptide"]).strip()))
+
+        existing_records = old_df.to_dict(orient="records")
+        print(
+            f"State recovery found: Loaded {len(completed_jobs)} jobs previously "
+            "'Submitted'. These will be skipped."
+        )
 
     df = pd.read_csv(args.csv)
-    pep_col = 'peptide' if 'peptide' in df.columns else df.columns[0]
+    require_columns(df, ("peptide",), "HPepDock candidate table")
+    pep_col = "peptide"
     
     # Slice the unique array context here to restrict analysis to the top 5 values
     top_peptides = df[pep_col].unique()[:config["docking"]["max_epitopes"]]

@@ -27,10 +27,15 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install \
             biopython \
+            numpy \
             pandas \
             PyYAML \
             pulp==2.7.0 \
+            pytest \
             snakemake==7.32.4
+
+      - name: Run unit tests
+        run: make test
 
       - name: Check workflow environment declarations
         run: make check-env

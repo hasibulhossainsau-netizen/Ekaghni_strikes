@@ -11,7 +11,7 @@ import subprocess
 from pathlib import Path
 import pandas as pd
 import argparse
-from pipeline_config import configured_tool, load_config, resolve_path
+from pipeline_config import configured_tool, load_config, require_columns, resolve_path
 
 def run_deeptmhmm_bulk(
     fasta_path: Path, output_dir: Path, executable: str, model: str, timeout: int
@@ -48,64 +48,64 @@ def parse_tmhmm_output(output_dir: Path, final_csv_path: Path, strong_binders_pa
     and maps scores directly to individual target peptides to satisfy downstream rules.
     """
     biolib_file = output_dir / "biolib_results" / "predicted_topologies.3line"
-    protein_topologies = {}
+    if not biolib_file.is_file():
+        raise FileNotFoundError(
+            f"DeepTMHMM output is missing: {biolib_file}. "
+            "The prediction command must produce predicted_topologies.3line."
+        )
 
-    if biolib_file.exists():
-        with open(biolib_file, "r") as f:
-            lines = f.readlines()
-            for i in range(0, len(lines), 3):
-                if i+2 < len(lines) and lines[i].startswith('>'):
-                    seq_id = lines[i].strip().lstrip('>')
-                    topology_string = lines[i+2].strip()
-                    protein_topologies[seq_id] = topology_string
-    else:
-        print(f"[WARN] DeepTMHMM raw output not found at {biolib_file}. Generating generic outer structural fallbacks.")
-        protein_topologies["all_vp2"] = "OOOOOOOOOO"
+    protein_records = {}
+    lines = biolib_file.read_text().splitlines()
+    if len(lines) % 3:
+        raise ValueError(f"DeepTMHMM output has an incomplete 3-line record: {biolib_file}")
+    for index in range(0, len(lines), 3):
+        header, sequence, topology = (line.strip() for line in lines[index:index + 3])
+        if not header.startswith(">") or not sequence or not topology:
+            raise ValueError(
+                f"DeepTMHMM output record at line {index + 1} is missing a header, "
+                "sequence, or topology string."
+            )
+        if len(sequence) != len(topology):
+            raise ValueError(
+                f"DeepTMHMM sequence/topology lengths differ for {header}: "
+                f"{len(sequence)} != {len(topology)}."
+            )
+        protein_records[header[1:].split()[0]] = (sequence.upper(), topology.upper())
 
     # --- Downstream Sub-fragment Projection Engine ---
     # We read your existing binders list to map full proteins down to explicit sub-peptides
     data = []
     
     # Check if we can intercept the sliding windows from your existing strong binders list
-    if strong_binders_path and os.path.exists(strong_binders_path):
-        binders_df = pd.read_csv(strong_binders_path)
-        # Look for standard sequence/peptide headers
-        pep_col = None
-        for col in binders_df.columns:
-            if str(col).lower().strip() in ["peptide", "sequence", "seq", "epitope"]:
-                pep_col = col
-                break
-        
-        if pep_col:
-            unique_peptides = binders_df[pep_col].dropna().unique()
-            for pep in unique_peptides:
-                pep_str = str(pep).upper().strip()
-                
-                # Calculate extracellular orientation fraction score
-                # If a peptide falls inside 'O' regions it gets a high surface score (1.0)
-                # If buried or unknown, defaults safely to neutral or exposed for vaccine safety
-                topology_score = 1.0 
-                
-                # Cross-reference with the master strings parsed above if coordinate maps exist
-                for prot_id, top_str in protein_topologies.items():
-                    if pep_str in top_str:  # Simple alignment sequence match check
-                        idx = top_str.find(pep_str)
-                        sub_top = top_str[idx:idx+len(pep_str)]
-                        # Fraction of residues that are extracellular ('O')
-                        topology_score = sub_top.count('O') / len(pep_str)
-                        break
-                
-                data.append({
-                    "peptide": pep_str,
-                    "topology_score": topology_score,
-                    "topology_string": sub_top if 'sub_top' in locals() else "OOOOOOOOO"
-                })
+    if strong_binders_path is None or not Path(strong_binders_path).is_file():
+        raise FileNotFoundError(
+            f"DeepTMHMM binder input is missing: {strong_binders_path}"
+        )
+    binders_df = pd.read_csv(strong_binders_path)
+    require_columns(binders_df, ("peptide",), "DeepTMHMM binder input")
+    unique_peptides = binders_df["peptide"].dropna().astype(str).str.upper().str.strip().unique()
+    for peptide in unique_peptides:
+        matches = [
+            (sequence, topology)
+            for sequence, topology in protein_records.values()
+            if peptide in sequence
+        ]
+        if not matches:
+            raise ValueError(
+                f"DeepTMHMM protein sequences do not contain binder peptide {peptide!r}."
+            )
+        sequence, topology = matches[0]
+        start = sequence.index(peptide)
+        sub_topology = topology[start:start + len(peptide)]
+        data.append({
+            "peptide": peptide,
+            "topology_score": sub_topology.count("O") / len(peptide),
+            "topology_string": sub_topology,
+        })
 
-    # Fallback placeholder row to ensure dataframes never write empty records
-    if not data:
-        data = [{"peptide": "AAYAAYAAY", "topology_score": 1.0, "topology_string": "OOOOOOOOO"}]
-
-    df = pd.DataFrame(data)
+    df = pd.DataFrame(
+        data, columns=("peptide", "topology_score", "topology_string")
+    )
     df.to_csv(final_csv_path, index=False)
     print(f"[SUCCESS] Projected topology CSV successfully written with explicit 'peptide' column at: {final_csv_path}")
 
@@ -124,9 +124,6 @@ def main():
         if args.strong_binders_csv
         else resolve_path(config["paths"]["mhc1_predictions_csv"], config)
     )
-    if not strong_binders_path.exists():
-        strong_binders_path = None
-
     result_dir = output_csv_path.parent
     result_dir.mkdir(parents=True, exist_ok=True)
 

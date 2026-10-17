@@ -4,24 +4,22 @@ import re
 import pandas as pd
 from Bio import SeqIO
 import argparse
-from pipeline_config import load_config, resolve_path
+from pathlib import Path
+from pipeline_config import load_config, require_columns, resolve_path
 
 def extract_epitopes(fasta_path, csv_path, output_path):
     print(f"[INFO] Reading residue-level scores from: {csv_path}")
-    try:
-        df_raw = pd.read_csv(csv_path)
-        # Clean columns and clear tracking whitespaces
-        df_raw.columns = [c.strip() for c in df_raw.columns]
-        if 'Accession' in df_raw.columns:
-            df_raw['Accession'] = df_raw['Accession'].astype(str).str.strip()
-            
-        print("[INFO] Generating per-protein sequence positional index tracks...")
-        # Since indices reset per protein, calculate a 1-based residue counter for each group
-        df_raw['Residue_idx'] = df_raw.groupby('Accession').cumcount() + 1
-        
-    except Exception as e:
-        print(f"[ERROR] Failed to read raw CSV file: {e}")
-        sys.exit(1)
+    df_raw = pd.read_csv(csv_path)
+    require_columns(
+        df_raw,
+        ("Accession", "BepiPred-3.0 score", "BepiPred-3.0 linear epitope score"),
+        "BepiPred residue-score table",
+    )
+    df_raw["Accession"] = df_raw["Accession"].astype(str).str.strip()
+    for score_column in ("BepiPred-3.0 score", "BepiPred-3.0 linear epitope score"):
+        df_raw[score_column] = pd.to_numeric(df_raw[score_column], errors="raise")
+    print("[INFO] Generating per-protein sequence positional index tracks...")
+    df_raw["Residue_idx"] = df_raw.groupby("Accession").cumcount() + 1
 
     records = []
     print(f"[INFO] Parsing linear epitope topology from: {fasta_path}")
@@ -44,14 +42,14 @@ def extract_epitopes(fasta_path, csv_path, output_path):
                     (df_raw['Residue_idx'].between(start_pos, end_pos))
                 ]
                 
-                # Fallback slice mechanism using native offsets if the custom counter yields empty matches
-                if sample_raw.empty:
-                    protein_block = df_raw[df_raw['Accession'] == protein_id]
-                    if not protein_block.empty:
-                        sample_raw = protein_block.iloc[match.start():match.end()]
+                if len(sample_raw) != length:
+                    raise ValueError(
+                        f"BepiPred residue scores do not cover {protein_id} "
+                        f"positions {start_pos}-{end_pos}."
+                    )
 
-                mean_bp3 = sample_raw['BepiPred-3.0 score'].mean() if not sample_raw.empty else 0.0
-                mean_linear = sample_raw['BepiPred-3.0 linear epitope score'].mean() if not sample_raw.empty else 0.0
+                mean_bp3 = sample_raw["BepiPred-3.0 score"].mean()
+                mean_linear = sample_raw["BepiPred-3.0 linear epitope score"].mean()
                 
                 records.append({
                     "Protein_ID": protein_id,
@@ -67,6 +65,7 @@ def extract_epitopes(fasta_path, csv_path, output_path):
     if out_df.empty:
         out_df = pd.DataFrame(columns=["Protein_ID", "Peptide", "Start", "End", "Length", "Mean_BepiPred_Score", "Mean_Linear_Epitope_Score"])
         
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
     out_df.to_csv(output_path, index=False)
     print(f"[SUCCESS] Written {len(out_df)} linear B-cell epitope coordinates to: {output_path}")
 

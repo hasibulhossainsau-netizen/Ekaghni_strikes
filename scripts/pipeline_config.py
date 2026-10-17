@@ -1,6 +1,7 @@
 """Shared configuration loading and path resolution for workflow scripts."""
 
 import os
+import hashlib
 import shutil
 from pathlib import Path
 
@@ -56,3 +57,20 @@ def configured_tool_if_available(config, name):
             return str(path)
         return None
     return shutil.which(executable)
+
+
+def require_columns(dataframe, required_columns, source):
+    """Raise a readable schema error when a table lacks required fields."""
+    missing = sorted(set(required_columns) - set(dataframe.columns))
+    if missing:
+        raise ValueError(
+            f"{source} is missing required column(s): {', '.join(missing)}. "
+            f"Found: {', '.join(map(str, dataframe.columns)) or '(no columns)'}."
+        )
+
+
+def deterministic_score(identifier, minimum=0.0, maximum=1.0):
+    """Map an identifier to a stable, non-constant mock score in a range."""
+    digest = hashlib.sha256(str(identifier).encode("utf-8")).digest()
+    fraction = int.from_bytes(digest[:8], "big") / ((1 << 64) - 1)
+    return minimum + fraction * (maximum - minimum)

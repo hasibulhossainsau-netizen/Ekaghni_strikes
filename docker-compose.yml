@@ -13,13 +13,15 @@ services:
       CORES: "${CORES:-4}"
     volumes:
       - .:/workspace
+      # Optional host-installed NetMHCpan, BepiPred 3, or ADFRsuite binaries.
+      # Configure their container paths under /opt/external-tools in config.yaml.
       - "${EXTERNAL_TOOLS_DIR:-./tools}:/opt/external-tools:ro"
     command:
       - /bin/sh
       - -ec
       - |
         case "$${PIPELINE_MODE}" in
-          smoke) exec make smoke-test mock-test ;;
+          smoke) exec make smoke-test test mock-test ;;
           full) exec make run USE_CONDA= ;;
           *) echo "PIPELINE_MODE must be 'smoke' or 'full' (got '$${PIPELINE_MODE}')" >&2; exit 2 ;;
         esac

@@ -47,18 +47,23 @@ def main():
         netmhc = pd.read_csv(netmhc_csv)
         assert {"protein_id", "allele", "peptide", "start", "end", "length", "ic50", "percentile_rank"} <= set(netmhc.columns)
         assert not netmhc.empty
+        assert netmhc["percentile_rank"].nunique() > 1
 
         toxin_csv = temp_dir / "toxinpred3.csv"
         run_script("run_toxinpred3.py", "--input", netmhc_csv, "--output", toxin_csv, "--config", config_path)
         toxin = pd.read_csv(toxin_csv)
         assert {"peptide", "toxicity_prediction", "toxicity_score"} <= set(toxin.columns)
+        assert {"protein_id", "percentile_rank"} <= set(toxin.columns)
         assert len(toxin) == len(netmhc)
+        assert toxin["toxicity_score"].nunique() > 1
 
         allergen_csv = temp_dir / "algpred2.csv"
         run_script("run_algpred2.py", "--input", toxin_csv, "--output", allergen_csv, "--config", config_path)
         allergen = pd.read_csv(allergen_csv)
         assert {"peptide", "allergenicity_prediction", "allergenicity_score"} <= set(allergen.columns)
         assert len(allergen) == len(toxin)
+        assert {"protein_id", "percentile_rank"} <= set(allergen.columns)
+        assert allergen["allergenicity_score"].nunique() > 1
 
         bcell_dir = temp_dir / "bcell"
         run_script(
@@ -72,6 +77,7 @@ def main():
         )
         raw_bcell = pd.read_csv(bcell_dir / "raw_output.csv")
         assert {"Accession", "BepiPred-3.0 score", "BepiPred-3.0 linear epitope score"} <= set(raw_bcell.columns)
+        assert raw_bcell["BepiPred-3.0 score"].nunique() > 1
         bcell_summary = temp_dir / "bcell-summary.csv"
         run_script(
             "extract_bcell_coordinates.py",

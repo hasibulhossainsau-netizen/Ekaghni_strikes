@@ -6,6 +6,7 @@ from pathlib import Path
 import argparse
 from pipeline_config import load_config, resolve_path
 
+
 def parse_fasta(fasta_path):
     sequences = []
     current_seq = []
@@ -22,6 +23,39 @@ def parse_fasta(fasta_path):
             sequences.append("".join(current_seq))
     return sequences
 
+
+def calculate_conservation(sequences, window_size):
+    """Return per-column consensus and conservation scores for aligned sequences."""
+    if not sequences:
+        raise ValueError("At least one aligned sequence is required.")
+    lengths = {len(sequence) for sequence in sequences}
+    if len(lengths) != 1:
+        raise ValueError("Aligned FASTA sequences must all have the same length.")
+    if window_size < 1:
+        raise ValueError("Conservation window size must be a positive integer.")
+
+    conservation_data = []
+    for position in range(next(iter(lengths))):
+        residues = [sequence[position].upper() for sequence in sequences]
+        non_gap_residues = [residue for residue in residues if residue != "-"]
+        if not non_gap_residues:
+            consensus_aa, conservation_score = "X", 0.0
+        else:
+            consensus_aa, count = Counter(non_gap_residues).most_common(1)[0]
+            conservation_score = count / len(residues)
+        conservation_data.append({
+            "position": position + 1,
+            "consensus_aa": consensus_aa,
+            "raw_score": round(conservation_score, 4),
+        })
+
+    df = pd.DataFrame(conservation_data)
+    df[f"window_{window_size}mer_avg"] = df["raw_score"].rolling(
+        window=window_size, min_periods=1
+    ).mean().round(4)
+    return df
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("input_aligned_fasta")
@@ -33,48 +67,20 @@ def main():
     output_csv = resolve_path(args.output_csv, config)
     
     if not Path(input_fasta).exists():
-        print(f"Error: Input file {input_fasta} not found.")
-        sys.exit(1)
+        parser.error(f"Input file {input_fasta} not found.")
         
     sequences = parse_fasta(input_fasta)
     if not sequences:
-        print("Error: No sequences found in FASTA.")
-        sys.exit(1)
+        parser.error(f"No sequences found in FASTA: {input_fasta}")
         
     num_seqs = len(sequences)
-    seq_len = len(sequences[0])
     
     print(f"[INFO] Calculating FIX-CONSERVATION for {num_seqs} sequences...")
-    
-    conservation_data = []
-    
-    for pos in range(seq_len):
-        residues_at_pos = [seq[pos] for seq in sequences if pos < len(seq)]
-        counts = Counter(residues_at_pos)
-        most_common_aa, count = counts.most_common(1)[0]
-        if most_common_aa == '-':
-            remaining = [r for r in residues_at_pos if r != '-']
-            if remaining:
-                most_common_aa, count = Counter(remaining).most_common(1)[0]
-                conservation_score = (count / num_seqs) * (len(remaining) / num_seqs) 
-            else:
-                most_common_aa = 'X'
-                conservation_score = 0.0
-        else:
-            conservation_score = count / num_seqs
-            
-        conservation_data.append({
-            "position": pos + 1,
-            "consensus_aa": most_common_aa,
-            "raw_score": round(conservation_score, 4)
-        })
-        
-    df = pd.DataFrame(conservation_data)
-    
     window_size = config["conservation"]["window_size"]
-    df[f'window_{window_size}mer_avg'] = df['raw_score'].rolling(
-        window=window_size, min_periods=1
-    ).mean().round(4)
+    try:
+        df = calculate_conservation(sequences, window_size)
+    except ValueError as error:
+        parser.error(str(error))
     
     Path(output_csv).parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(output_csv, index=False)

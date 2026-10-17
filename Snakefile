@@ -1,5 +1,5 @@
 # =============================================================================
-# Snakefile — CPV2 Canine Vaccine Design Pipeline v0.1.0 
+# Snakefile — CPV2 Canine Vaccine Design Pipeline v0.3.0
 # =============================================================================
 
 configfile: "config.yaml"
@@ -220,7 +220,7 @@ rule iedb_mhc2:
         csv = f"{IMMUNO_DIR}/iedb_mhc2_predictions.csv"
     params:
         method  = config["mhc2_epitope"].get("method", "nn_align"),
-        alleles = ",".join(config["mhc2_epitope"]["dla_mhc2_alleles"]),
+        alleles = ",".join(config["mhc2_epitope"]["hla_surrogate_alleles"]),
         lengths = ",".join(str(l) for l in config["mhc2_epitope"].get("lengths", [15]))
     conda:
         "envs/iedb_tools.yaml"
@@ -325,7 +325,7 @@ rule iedb_mhc1_processing:
     params:
         method     = config["mhc1_processing"].get("method", "recommended"),
         proteasome = config["mhc1_processing"].get("proteasome", "immuno"),
-        alleles    = ",".join(config["mhc1_processing"]["dla_mhc1_alleles"])
+        alleles    = ",".join(config["mhc1_processing"]["hla_surrogate_alleles"])
     conda:
         "envs/iedb_tools.yaml"
     shell:

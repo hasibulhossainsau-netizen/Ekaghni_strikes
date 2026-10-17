@@ -4,7 +4,7 @@ import pandas as pd
 import numpy as np
 import os
 import sys
-from pipeline_config import load_config, resolve_path
+from pipeline_config import load_config, require_columns, resolve_path
 
 def parse_args():
     parser = argparse.ArgumentParser(
@@ -32,7 +32,8 @@ def main():
     
     # 1. Load Toxicity Profiles
     tox_df = pd.read_csv(args.tox)
-    tox_col = "toxicity_prediction" if "toxicity_prediction" in tox_df.columns else "prediction"
+    require_columns(tox_df, ("peptide", "toxicity_prediction"), "toxicity predictions")
+    tox_col = "toxicity_prediction"
     tox_set = set(
         tox_df[tox_df[tox_col].astype(str).str.lower().str.contains("toxic") & 
                ~tox_df[tox_col].astype(str).str.lower().str.contains("non")]["peptide"]
@@ -41,7 +42,8 @@ def main():
 
     # 2. Load Allergenicity Profiles
     alg_df = pd.read_csv(args.alg)
-    alg_col = "allergenicity_prediction" if "allergenicity_prediction" in alg_df.columns else "prediction"
+    require_columns(alg_df, ("peptide", "allergenicity_prediction"), "allergenicity predictions")
+    alg_col = "allergenicity_prediction"
     alg_set = set(
         alg_df[alg_df[alg_col].astype(str).str.lower().str.contains("allergen") & 
                ~alg_df[alg_col].astype(str).str.lower().str.contains("non")]["peptide"]
@@ -50,6 +52,7 @@ def main():
 
     # 3. Load Host Homology Protein Exclusions
     blast_df = pd.read_csv(args.blast)
+    require_columns(blast_df, ("protein_id", "host_match"), "host homology results")
     has_homology = blast_df[(blast_df["host_match"].notna()) & (blast_df["host_match"] != "None")]
     excluded_proteins = set(has_homology["protein_id"].unique())
 
@@ -66,6 +69,7 @@ def main():
 
     # 4. Filter MHC I Candidates
     mhc1 = pd.read_csv(args.mhc1)
+    require_columns(mhc1, ("peptide", "protein_id", "start", "end"), "MHC-I predictions")
     mhc1["passed_consensus_safety"] = mhc1.apply(
         lambda row: is_safe(row["peptide"], row.get("protein_id")), axis=1
     )
@@ -74,7 +78,8 @@ def main():
 
     # 5. Filter MHC II Predictions
     mhc2 = pd.read_csv(args.mhc2)
-    mhc2_pep_col = "peptide" if "peptide" in mhc2.columns else mhc2.columns[0]
+    require_columns(mhc2, ("peptide", "protein_id", "start", "end"), "MHC-II predictions")
+    mhc2_pep_col = "peptide"
     mhc2["passed_consensus_safety"] = mhc2.apply(
         lambda row: is_safe(row[mhc2_pep_col], row.get("protein_id")), axis=1
     )
@@ -83,9 +88,10 @@ def main():
 
     # 6. Filter B-Cell Linear Tracks
     bcell = pd.read_csv(args.bcell)
-    bcell_pep_col = "peptide" if "peptide" in bcell.columns else ("sequence" if "sequence" in bcell.columns else bcell.columns[0])
+    require_columns(bcell, ("Peptide", "Protein_ID", "Start", "End"), "B-cell epitope summary")
+    bcell_pep_col = "Peptide"
     bcell["passed_consensus_safety"] = bcell.apply(
-        lambda row: is_safe(row[bcell_pep_col], row.get("protein_id")), axis=1
+        lambda row: is_safe(row[bcell_pep_col], row["Protein_ID"]), axis=1
     )
     bcell_filtered = bcell[bcell["passed_consensus_safety"] == True].copy()
     bcell_filtered.to_csv(os.path.join(args.out_dir, "filtered_bcell_epitopes.csv"), index=False)
@@ -95,6 +101,7 @@ def main():
     
     # Track hotspots along the sequence lengths
     cons_df = pd.read_csv(args.cons)
+    require_columns(cons_df, ("position",), "conservation matrix")
     max_position = int(cons_df["position"].max())
     
     mhc1_coverage = np.zeros(max_position + 2)

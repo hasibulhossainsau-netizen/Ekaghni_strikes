@@ -10,7 +10,12 @@ import subprocess
 import tempfile
 from pathlib import Path
 from Bio import SeqIO
-from pipeline_config import configured_tool_if_available, load_config, resolve_path
+from pipeline_config import (
+    configured_tool_if_available,
+    deterministic_score,
+    load_config,
+    resolve_path,
+)
 
 def run_netmhcpan(allele, sequence, length, netmhcpan_path, command_threshold, timeout):
     with tempfile.NamedTemporaryFile(mode='w', suffix='.fasta', delete=False) as tmp:
@@ -66,14 +71,15 @@ def run_netmhcpan(allele, sequence, length, netmhcpan_path, command_threshold, t
             Path(tmp_path).unlink(missing_ok=True)
 
 
-def mock_netmhcpan_prediction(sequence, length, rank_threshold):
+def mock_netmhcpan_prediction(allele, sequence, length, rank_threshold):
     if len(sequence) < length:
         return []
+    peptide = sequence[:length]
     return [{
         "pos": "1",
-        "peptide": sequence[:length],
-        "affinitynm": "100.0",
-        "rank_el": str(min(rank_threshold / 2, 0.1)),
+        "peptide": peptide,
+        "affinitynm": str(round(25 + deterministic_score(f"{allele}:{peptide}", 0, 800), 2)),
+        "rank_el": str(round(deterministic_score(f"rank:{allele}:{peptide}", 0.02, min(rank_threshold * 0.9, 0.45)), 4)),
     }]
 
 
@@ -130,7 +136,7 @@ def main():
         for allele in dla_alleles:
             for length in peptide_lengths:
                 if use_mock:
-                    preds = mock_netmhcpan_prediction(seq, length, rank_threshold)
+                    preds = mock_netmhcpan_prediction(allele, seq, length, rank_threshold)
                 else:
                     try:
                         preds = run_netmhcpan(
@@ -139,7 +145,7 @@ def main():
                     except FileNotFoundError:
                         print("[WARNING] NetMHCpan disappeared before execution; switching to mock predictions.")
                         use_mock = True
-                        preds = mock_netmhcpan_prediction(seq, length, rank_threshold)
+                        preds = mock_netmhcpan_prediction(allele, seq, length, rank_threshold)
                 for p in preds:
                     p["target_allele"] = allele
                     p["target_length"] = length

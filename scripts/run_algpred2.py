@@ -6,7 +6,13 @@ from pathlib import Path
 import subprocess
 import tempfile
 import os
-from pipeline_config import configured_tool_if_available, load_config, resolve_path
+from pipeline_config import (
+    configured_tool_if_available,
+    deterministic_score,
+    load_config,
+    require_columns,
+    resolve_path,
+)
 
 def peptides_to_fasta(peptides, temp_fasta):
     with open(temp_fasta, 'w') as f:
@@ -35,20 +41,17 @@ def main():
 
     df = pd.read_csv(input_path)
     df.columns = df.columns.str.lower()
-    if 'peptide' not in df.columns:
-        print(f"[ERROR] Input CSV must have 'peptide' column. Found: {list(df.columns)}")
-        sys.exit(1)
-
-    peptides = df['peptide'].astype(str).str.upper().str.strip().unique().tolist()
+    require_columns(df, ("peptide",), "AlgPred2 input table")
+    df["peptide"] = df["peptide"].astype(str).str.upper().str.strip()
+    peptides = df["peptide"].drop_duplicates().tolist()
 
     predictions = {}
 
     if use_mock:
-        result_list = [{
-            "peptide": pep,
-            "allergenicity_prediction": "Non-Allergen",
-            "allergenicity_score": 0.0,
-        } for pep in peptides]
+        predictions = {
+            pep: ("Non-Allergen", round(deterministic_score(pep, 0.02, 0.4), 4))
+            for pep in peptides
+        }
     else:
         with tempfile.TemporaryDirectory() as tmpdir:
             temp_fasta = Path(tmpdir) / "peptides.fa"
@@ -81,12 +84,16 @@ def main():
 
                 pred_df = pd.read_csv(pred_file)
                 pred_df.columns = pred_df.columns.str.lower()
+                require_columns(pred_df, ("prediction", "score"), "AlgPred2 output")
+                if len(pred_df) != len(peptides):
+                    raise ValueError(
+                        "AlgPred2 output row count does not match the submitted peptide count."
+                    )
 
-                for i, row in pred_df.iterrows():
-                    seq_id = f"pep_{i}"
-                    prediction = row.get("prediction", row.iloc[1] if len(row) > 1 else "Non-Allergen")
-                    score = row.get("score", row.iloc[2] if len(row) > 2 else 0.0)
-                    predictions[seq_id] = (str(prediction), float(score))
+                predictions = {
+                    pep: (str(row["prediction"]), float(row["score"]))
+                    for pep, (_, row) in zip(peptides, pred_df.iterrows())
+                }
 
             except subprocess.CalledProcessError as e:
                 print(f"[ERROR] AlgPred2 failed:\nSTDOUT:\n{e.stdout}\nSTDERR:\n{e.stderr}")
@@ -94,25 +101,21 @@ def main():
             except FileNotFoundError:
                 print("[WARNING] AlgPred2 disappeared before execution; using mock predictions.")
                 predictions = {
-                    f"pep_{i}": ("Non-Allergen", 0.0)
-                    for i in range(len(peptides))
+                    pep: ("Non-Allergen", round(deterministic_score(pep, 0.02, 0.4), 4))
+                    for pep in peptides
                 }
             finally:
                 os.chdir(original_cwd)
 
-        result_list = []
-        for i, pep in enumerate(peptides):
-            seq_id = f"pep_{i}"
-            pred, score = predictions.get(seq_id, ("Non-Allergen", 0.0))
-            result_list.append({
-                "peptide": pep,
-                "allergenicity_prediction": pred,
-                "allergenicity_score": round(float(score), 4)
-            })
-
-    res_df = pd.DataFrame(result_list)
+    result_df = df.copy()
+    result_df["allergenicity_prediction"] = result_df["peptide"].map(
+        {pep: prediction for pep, (prediction, _) in predictions.items()}
+    ).fillna("Non-Allergen")
+    result_df["allergenicity_score"] = result_df["peptide"].map(
+        {pep: score for pep, (_, score) in predictions.items()}
+    ).fillna(0.0).astype(float).round(4)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    res_df.to_csv(output_path, index=False)
+    result_df.to_csv(output_path, index=False)
 
     print(f"[SUCCESS] AlgPred2 prediction completed → {output_path}")
     print(f"Total peptides processed: {len(peptides)}")

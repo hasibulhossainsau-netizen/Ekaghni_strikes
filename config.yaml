@@ -1,5 +1,5 @@
 # ==========================================================
-# VACDES PIPELINE CONFIG v0.1.0 
+# VACDES PIPELINE CONFIG v0.3.0
 # ==========================================================
 
 project:
@@ -184,7 +184,9 @@ mhc2_epitope:
   lengths: [15]                    
   fallback_stride: 5
   
-  dla_mhc2_alleles:
+  # IEDB does not expose a supported canine DLA-II model; these HLA-II
+  # alleles are experimental surrogates, not validated DLA equivalents.
+  hla_surrogate_alleles:
     - "HLA-DRB1*01:01"             
     - "HLA-DRB1*04:01"             
     - "HLA-DRB1*11:01"             
@@ -201,7 +203,9 @@ mhc1_processing:
   method: "recommended"            
   proteasome: "immuno"             
   
-  dla_mhc1_alleles:
+  # IEDB processing currently lacks DLA support. HLA-I alleles are used only
+  # as proxies for the processing/TAP component, not as canine binding calls.
+  hla_surrogate_alleles:
     - "HLA-A*02:01"                
     - "HLA-B*07:02"                
     - "HLA-A*11:01"                
@@ -327,6 +331,12 @@ ranking:
     conservation: 0.15           
     immunogenicity: 0.20         
     safety: 0.10                 
+
+data_sources:
+  # NCBI nucleotide accession-to-FASTA endpoint; accessions come from samples.
+  genome_url_template: "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=nuccore&id={accession}&rettype=fasta&retmode=text"
+  # UniProt reference proteome for Canis lupus familiaris (UP000002254).
+  dog_proteome_url: "https://rest.uniprot.org/uniprotkb/stream?query=proteome:UP000002254&format=fasta"
 
 # ==========================================================
 # REPORTING & VISUALIZATION

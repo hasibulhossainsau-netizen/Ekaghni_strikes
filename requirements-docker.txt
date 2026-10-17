@@ -1,6 +1,7 @@
 # Shared Python runtime used by the container when Snakemake Conda envs are disabled.
 snakemake>=7.32,<8
 pulp==2.7.0
+pytest>=8,<9
 biopython>=1.80
 numpy==1.23.5
 pandas>=2.0,<3

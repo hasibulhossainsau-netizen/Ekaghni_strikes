@@ -1,0 +1,414 @@
+# Example configuration for Ekaghni_strikes v0.3.0.
+# Copy to config.yaml and adjust samples, paths, tool executables, thresholds,
+# and external-service settings for your installation. This is a full pipeline
+# configuration; relative filesystem paths are resolved from the repository.
+# Docker users should point manually mounted tools below /opt/external-tools.
+# Synthetic predictor fallbacks are for software tests only, never biology.
+
+# Repository input/output locations. Derived output paths can be redirected
+# independently; paths used by rules must remain consistent with Snakefile inputs.
+
+project:
+  name: "CPV2_Vaccine_Design"
+  version: "0.3.0"
+  organism: "Canine parvovirus type 2"
+  host: "Canis lupus familiaris"
+
+# ==========================================================
+# PATHS (Using relative paths for cross-machine portability)
+# ==========================================================
+paths:
+  root: "."
+  data: "data"
+  raw_genomes: "data/fasta"          
+  cleaned_genomes: "data/fasta_cleaned"
+  proteins: "data/protein"           
+  alignment: "data/align"            
+  blast: "data/blast"                
+  epitopes: "results/epitopes"       
+  structures: "results/structures"
+  docking: "results/docking"          
+  mhc_structures: "data/MHC_I"       
+  md: "results/md"
+  reports: "results/reports"
+  logs: "logs"
+  scripts: "scripts"                 
+  env: "envs"                        
+  filtering: "results/filtering"
+  immunogenicity: "results/immunogenicity"
+  bcell: "results/bcell"
+  safety: "results/safety"
+  topology: "results/topology"
+  consensus: "results/consensus"
+  vaccine_construct: "results/vaccine_construct"
+  master_protein_fasta: "data/protein/master_pool.fasta"
+  reference_vp2_fasta: "data/fasta/FJ197845_VP2.fasta"
+  aligned_proteins: "data/align/All_VP2_aligned.fasta"
+  conservation_csv: "data/align/VP2_conservation.csv"
+  mhc1_predictions_csv: "data/align/vp2_strong_binders.csv"
+  topology_csv: "results/topology/vp2_tm_topology.csv"
+  final_ranked_tcell_csv: "results/final_ranked_tcell_epitopes.csv"
+  docking_screening: "results/docking/virtual_screening"
+  host_exclusion_csv: "results/filtering/host_homology_exclusion.csv"
+  host_exclusion_report: "results/host_exclusion_report.json"
+
+# Tool configuration: use `path` for an explicit executable/script location or
+# `command` for a program discoverable on PATH. Empty NetMHCpan path intentionally
+# activates its warning + synthetic fallback until a real installation is set.
+# For Compose mounts, configure explicit paths under /opt/external-tools.
+tools:
+  blastn:
+    command: "blastn"
+  blastp:
+    command: "blastp"
+  makeblastdb:
+    command: "makeblastdb"
+  mafft:
+    command: "mafft"
+  netmhcpan:
+    path: ""
+  toxinpred3:
+    command: "toxinpred3"
+  algpred2:
+    command: "algpred2"
+  bepipred3:
+    path: "tools/bepipred/BepiPred3_src/bepipred3_CLI.py"
+  deeptmhmm:
+    command: "biolib"
+    model: "DTU/DeepTMHMM:1.0.24"
+    timeout_seconds: 3600
+  prepare_ligand:
+    command: "prepare_ligand"
+  prepare_receptor:
+    command: "prepare_receptor"
+  agfr:
+    command: "agfr"
+  adcp:
+    command: "adcp"
+
+# Reference FASTA and BLAST database prefix. The BLAST index is built from the
+# FASTA by the workflow; scripts/download_data.py downloads the FASTA.
+databases:
+  dog_proteome_fasta: "data/reference/dog_proteome.fa"
+  dog_blast_db: "data/reference/dog_db"
+
+# ==========================================================
+# Input genome accession/file stems (without .fasta). Download with
+# scripts/download_data.py, or provide these files manually under raw_genomes.
+# ==========================================================
+samples:
+  - FJ197845
+  - PV611245
+  - PV611246
+  - PV611247
+
+# ==========================================================
+# Coordinates are 1-based inclusive on the configured reference genome.
+# ==========================================================
+reference:
+  genome: "data/fasta/FJ197845.fasta"
+  vp2_gene:
+    start: 2771
+    end: 4535
+
+# ==========================================================
+# BLASTn-based VP2 extraction limits and timeout.
+# ==========================================================
+sequence_extraction:
+  enabled: true
+  method: "blastn"
+  evalue: 1.0e-5
+  max_target_seqs: 1
+  timeout_seconds: 120
+  min_identity: 90
+  keep_reverse_complement: true
+
+# ==========================================================
+# MAFFT mode, iterations, threads, and gap penalty for aligned VP2 sequences.
+# ==========================================================
+alignment:
+  tool: "mafft"
+  mode: "--linsi"          
+  maxiterate: 1000
+  threads: 4               
+  gap_penalty: 1.53
+
+# ==========================================================
+# Conservation cutoff, minimum region, rolling window, and emitted metrics.
+# ==========================================================
+conservation:
+  enabled: true
+  min_conservation_percent: 95
+  min_region_length: 8
+  window_size: 9
+  remove_gap_columns: true
+  metrics:
+    - shannon_entropy
+    - residue_frequency
+    - variability_index
+
+# ==========================================================
+# Dog-proteome similarity thresholds; matching query peptides are excluded.
+# ==========================================================
+host_homology:
+  enabled: true
+  database: "dog_proteome"
+  blastp:
+    max_target_seqs: 10
+    timeout_seconds: 120
+  thresholds:
+    identity: 80                  
+    coverage: 70                  
+    evalue: 1.0e-3
+  remove_host_hits: true
+
+# ==========================================================
+# Canine DLA-I NetMHCpan alleles, peptide lengths, and binder rank thresholds.
+# ==========================================================
+tcell_epitope:
+  enabled: true
+  predictor:
+    tool: "NetMHCpan"
+    version: "4.1"
+  peptide_lengths: [8, 9, 10, 11]
+  netmhcpan:
+    command_threshold: -0.5
+  
+  dla_alleles:
+    - "DLA-8803401"    
+    - "DLA-8850101"    
+    - "DLA-8850801"    
+    - "DLA"         
+  
+  thresholds:
+    strong_binder_rank: 0.5    
+    weak_binder_rank: 2.0
+  
+  timeout_seconds: 600
+
+# ==========================================================
+# IEDB MHC-II settings. IEDB lacks supported canine DLA-II models; HLA values
+# below are proxies only and must not be interpreted as validated DLA calls.
+# ==========================================================
+mhc2_epitope:
+  enabled: true
+  method: "nn_align"               
+  lengths: [15]                    
+  fallback_stride: 5
+  
+  # IEDB does not expose a supported canine DLA-II model; these HLA-II
+  # alleles are experimental surrogates, not validated DLA equivalents.
+  hla_surrogate_alleles:
+    - "HLA-DRB1*01:01"             
+    - "HLA-DRB1*04:01"             
+    - "HLA-DRB1*11:01"             
+  
+  thresholds:
+    strong_binder_percentile: 1.0  
+    weak_binder_percentile: 5.0
+
+# ==========================================================
+# IEDB processing settings. HLA-I alleles are processing surrogates only because
+# this service currently lacks canine DLA support.
+# ==========================================================
+mhc1_processing:
+  enabled: true
+  method: "recommended"            
+  proteasome: "immuno"             
+  
+  # IEDB processing currently lacks DLA support. HLA-I alleles are used only
+  # as proxies for the processing/TAP component, not as canine binding calls.
+  hla_surrogate_alleles:
+    - "HLA-A*02:01"                
+    - "HLA-B*07:02"                
+    - "HLA-A*11:01"                
+  fallback_allele: "HLA-A*02:01"
+
+# ==========================================================
+# Weighted combination of MHC-II, processing, and breed population coverage.
+# ==========================================================
+ensemble:
+  enabled: true
+  weight_mhc2: 0.40               
+  weight_processing: 0.35         
+  weight_population_coverage: 0.25 
+  normalization: "minmax"          
+  breed_weights_file: "config/breed_weights.csv"  
+  use_breed_specificity: true
+  target_breeds:
+    - "Labrador"
+    - "German_Shepherd"
+    - "Mixed"
+    - "All_Breeds"
+
+# ==========================================================
+# BepiPred mode, score threshold, rolling window, and candidate percentile.
+# ==========================================================
+bcell_epitope:
+  enabled: true
+  prediction_mode: "vt_pred"       
+  threshold: 0.1512                
+  rolling_window_size: 9           
+  top_pct_cands: 20                
+
+# Vaccine assembly limits, adjuvant/helper sequences, and inter-segment linkers.
+vaccine_construct:
+  max_epitopes_per_class: 5
+  adjuvant: "MAQVINTNSLSLLTQNNLNKSQSALGTAIERLSSGLRINSAKDDAAGQAIANRFTANIKGLTQASRNANDGISIAQTTEGALNEINNNLQRVRELAVQSANSTNSQSDLDSIQAEITQRLNEIDRVSGQTQFNGVKVLAQDNTLT"
+  helper_epitope: "AKFVAAWTLKAAA"
+  linkers:
+    adjuvant_helper: "EAAAK"
+    helper_mhc1: "GGGS"
+    mhc1_mhc2: "GGGS"
+    mhc2_bcell: "GGGS"
+    mhc1: "AAY"
+    mhc2: "GGGS"
+    bcell: "GPGPG"
+
+# ==========================================================
+# Choose local ADCP or remote HPepDock; the matching executable/service settings
+# below are only used for the selected engine.
+# ==========================================================
+docking:
+  tool: "hpepdock"                 # Toggle option: "hpepdock" OR "adcp"
+  receptors:
+    - "5F1I"
+    - "7CJQ"
+
+  # Settings used if tool: "hpepdock"
+  server_url: "http://huanglab.phys.hust.edu.cn/hpepdock/runhpepdock.php"
+  email: "your_email@example.com"
+  max_retries: 3
+  timeout_seconds: 180
+
+  # Settings used if tool: "adcp"
+
+  grid_padding: 4.0
+  replicas: 40
+  steps: 1000000
+  threads: 4
+  max_epitopes: 5
+  score_cutoff: 50.0
+
+# ==========================================================
+# Toxicity and allergenicity filtering thresholds and wrapper timeouts.
+# ==========================================================
+toxicity:
+  enabled: true
+  tool: "ToxinPred3"
+  remove_toxic_peptides: true
+  threshold: 0.5
+  method: 1
+  timeout_seconds: 600
+
+allergenicity:
+  enabled: true
+  tools:
+    - "AlgPred2"
+  remove_allergens: true
+  threshold: 0.5
+  timeout_seconds: 600
+
+# Remote API endpoints/timeouts. Mock outputs are produced when supported calls
+# are unavailable; those synthetic values are for pipeline testing only.
+external_services:
+  iedb:
+    mhc2_url: "https://tools-cluster-interface.iedb.org/tools_api/mhcii/"
+    processing_url: "https://tools-cluster-interface.iedb.org/tools_api/processing/"
+    timeout_seconds: 180
+  rcsb:
+    download_url: "https://files.rcsb.org/download/{pdb_id}.pdb"
+    timeout_seconds: 30
+  hpepdock:
+    retry_delay_seconds: 15
+    rate_limit_delay_seconds: 5
+    peptide_models: 1000
+
+# ==========================================================
+# Topology-related tool names and whether to retain only surface-exposed regions.
+# ==========================================================
+structure_analysis:
+  enabled: true
+  secondary_structure:
+    tool: "PSIPRED"
+  solvent_accessibility:
+    tool: "NetSurfP"
+  transmembrane_filter:
+    tool: "DeepTMHMM"
+  keep_surface_exposed_only: true
+
+# ==========================================================
+# Weights used for the final composite ranking; all configured weights should
+# sum to 1.0.
+# ==========================================================
+ranking:
+  weights:
+    mhc_binding: 0.25            
+    mhc2_binding: 0.20           
+    processing_efficiency: 0.10  
+    conservation: 0.15           
+    immunogenicity: 0.20         
+    safety: 0.10                 
+
+# URLs used by scripts/download_data.py. The UniProt proteome identifier is the
+# canine reference proteome UP000002254.
+data_sources:
+  # NCBI nucleotide accession-to-FASTA endpoint; accessions come from samples.
+  genome_url_template: "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=nuccore&id={accession}&rettype=fasta&retmode=text"
+  # UniProt reference proteome for Canis lupus familiaris (UP000002254).
+  dog_proteome_url: "https://rest.uniprot.org/uniprotkb/stream?query=proteome:UP000002254&format=fasta"
+
+# ==========================================================
+# Enable report formats and select plots.
+# ==========================================================
+reporting:
+  save_csv: true
+  save_json: true
+  save_html: false
+  plots:
+    - mhc2_score_distribution
+    - processing_score_ranking
+    - ensemble_score_ranking
+    - population_coverage_comparison
+
+# ==========================================================
+# Reproducibility and parallel execution settings.
+# ==========================================================
+execution:
+  workflow_manager: "snakemake"
+  reproducibility:
+    save_versions: true
+    save_command_logs: true
+    random_seed: 42
+  parallel:
+    enabled: true
+    max_threads: 4
+
+# ==========================================================
+# Runtime version and declared core tool/package requirements.
+# ==========================================================
+environment:
+  python: "3.10"
+  required_tools:
+    - mafft              
+    - blast+             
+    - netmhcpan          
+    - deeptmhmm          
+    - pandas             
+    - numpy              
+    - requests           
+
+# ==========================================================
+# Input QC checks and minimum sequence length.
+# ==========================================================
+qc:
+  enabled: true
+  minimum_sequence_length: 100
+  checks:
+    - duplicate_sequences
+    - empty_sequences
+    - invalid_amino_acids
+    - alignment_length_consistency
+    - fasta_header_validation
+    - iedb_score_validity
+    - ensemble_score_validity
