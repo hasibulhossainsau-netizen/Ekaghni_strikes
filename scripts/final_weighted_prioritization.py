@@ -4,7 +4,7 @@ import pandas as pd
 import numpy as np
 import sys
 import os
-import yaml
+from pipeline_config import load_config, resolve_path
 
 def parse_args():
     parser = argparse.ArgumentParser(
@@ -25,15 +25,14 @@ def main():
     args = parse_args()
 
     # 1. Load config weights safely
-    with open(args.config, 'r') as f:
-        config = yaml.safe_load(f)
+    config = load_config(args.config)
+    for argument in (
+        "mhc", "topology", "conservation", "blast", "immunogenicity",
+        "toxicity", "allergenicity", "output",
+    ):
+        setattr(args, argument, resolve_path(getattr(args, argument), config))
     
-    if "prioritization" in config and "weights" in config["prioritization"]:
-        weights = config["prioritization"]["weights"]
-    elif "prioritization_weights" in config:
-        weights = config["prioritization_weights"]
-    else:
-        weights = {"mhc_binding": 0.25, "mhc2_binding": 0.20, "processing_efficiency": 0.15, "conservation": 0.15, "immunogenicity": 0.15, "safety": 0.10}
+    weights = config["ranking"]["weights"]
 
     # 2. Load Core MHC Dataframe
     print("[PROCESSING] Loading core MHC binders...")
@@ -88,7 +87,8 @@ def main():
     print("[PROCESSING] Processing alignment positional conservation matrix...")
     cons_df = pd.read_csv(args.conservation)
     pos_col = next((c for c in ["position", "pos", "Pos"] if c in cons_df.columns), cons_df.columns[0])
-    val_col = next((c for c in ["window_9mer_avg", "score", "conservation"] if c in cons_df.columns), cons_df.columns[-1])
+    window_column = f"window_{config['conservation']['window_size']}mer_avg"
+    val_col = next((c for c in [window_column, "score", "conservation"] if c in cons_df.columns), cons_df.columns[-1])
     pos_scores = dict(zip(cons_df[pos_col].astype(int), cons_df[val_col].astype(float)))
 
     # 9. Assemble and Score Final Combined Dataframe

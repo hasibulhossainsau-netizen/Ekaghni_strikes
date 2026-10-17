@@ -19,7 +19,8 @@ logs/
 # 3. DATA DIRECTORIES (Heavy Inputs, Databases & PDBs)
 # =============================================================================
 # Ignore all sub-folders in data/ but keep the main directory structured
-data/fasta/
+data/fasta/*
+!data/fasta/test_sample.fasta
 data/fasta_cleaned/
 data/protein/
 data/align/

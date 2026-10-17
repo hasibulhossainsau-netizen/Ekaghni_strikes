@@ -3,6 +3,25 @@
 # =============================================================================
 
 configfile: "config.yaml"
+from pathlib import Path
+
+PATHS = config["paths"]
+TOOLS = config["tools"]
+RAW_FASTA = PATHS["raw_genomes"]
+CLEAN_FASTA = PATHS["cleaned_genomes"]
+PROTEIN_DIR = PATHS["proteins"]
+ALIGN_DIR = PATHS["alignment"]
+BLAST_DIR = PATHS["blast"]
+FILTER_DIR = PATHS["filtering"]
+IMMUNO_DIR = PATHS["immunogenicity"]
+BCELL_DIR = PATHS["bcell"]
+SAFETY_DIR = PATHS["safety"]
+TOPOLOGY_DIR = PATHS["topology"]
+CONSENSUS_DIR = PATHS["consensus"]
+VACCINE_DIR = PATHS["vaccine_construct"]
+MHC_DIR = PATHS["mhc_structures"]
+DOG_DB = config["databases"]["dog_blast_db"]
+REFERENCE_ID = Path(config["reference"]["genome"]).stem
 
 # 1. Extract the chosen tool dynamically from config
 CHOSEN_TOOL = config.get("docking", {}).get("tool", "hpepdock").lower()
@@ -10,24 +29,24 @@ CHOSEN_TOOL = config.get("docking", {}).get("tool", "hpepdock").lower()
 # 2. Define the input router function
 def get_final_docking_target(wildcards):
     if CHOSEN_TOOL == "adcp":
-        return "results/docking/adcp_screening_summary.txt"
+        return f"{PATHS['docking']}/adcp_screening_summary.txt"
     else:
-        return "results/docking/hpepdock_submissions.txt"
+        return f"{PATHS['docking']}/hpepdock_submissions.txt"
 
 rule all:
     input:
-        "results/filtering/host_homology_exclusion.csv",
-        "data/align/VP2_conservation.csv",
-        "results/safety/mhc1_algpred2_checked.csv",
-        "results/safety/mhc2_algpred2_checked.csv",
-        "results/safety/bcell_algpred2_checked.csv",
-        "results/final_ranked_tcell_epitopes.csv",
-        "results/consensus/overlapping_consensus_regions.csv",
+        PATHS["host_exclusion_csv"],
+        PATHS["conservation_csv"],
+        f"{SAFETY_DIR}/mhc1_algpred2_checked.csv",
+        f"{SAFETY_DIR}/mhc2_algpred2_checked.csv",
+        f"{SAFETY_DIR}/bcell_algpred2_checked.csv",
+        PATHS["final_ranked_tcell_csv"],
+        f"{CONSENSUS_DIR}/overlapping_consensus_regions.csv",
         
         # CHANGED: Replaced the hardcoded path with dynamic function
         get_final_docking_target,  
         
-        "results/vaccine_construct/final_vaccine_sequence.fasta"
+        f"{VACCINE_DIR}/final_vaccine_sequence.fasta"
 
 
 # =============================================================================
@@ -38,44 +57,44 @@ rule extract_ref_vp2:
     input:
         ref = config["reference"]["genome"]
     output:
-        "data/fasta/FJ197845_VP2.fasta"
+        PATHS["reference_vp2_fasta"]
     params:
         ref_start = config["reference"]["vp2_gene"]["start"],
         ref_end   = config["reference"]["vp2_gene"]["end"]
     conda:
         "envs/blast.yaml"
     shell:
-        "python scripts/extract_ref_vp2.py {input.ref} {params.ref_start} {params.ref_end} {output}"
+        "python scripts/extract_ref_vp2.py {input.ref} {params.ref_start} {params.ref_end} {output} --config config.yaml"
 
 rule extract_query_vp2:
     input:
-        genomes  = expand("data/fasta/{sample}.fasta", sample=config["samples"]),
-        ref_done = "data/fasta/FJ197845_VP2.fasta"
+        genomes  = expand(f"{RAW_FASTA}/{{sample}}.fasta", sample=config["samples"]),
+        ref_done =         PATHS["reference_vp2_fasta"]
     output:
         status = expand(
-            "data/fasta/{sample}_VP2.fasta",
-            sample=[s for s in config["samples"] if s != "FJ197845"]
+            f"{RAW_FASTA}/{{sample}}_VP2.fasta",
+            sample=[s for s in config["samples"] if s != REFERENCE_ID]
         )
     conda:
         "envs/blast.yaml"
     shell:
-        "python scripts/vp2_extract.py"
+        "python scripts/vp2_extract.py --config config.yaml"
 
 rule sanitize_sequences:
     input:
-        "data/fasta/{sample}_VP2.fasta"
+        f"{RAW_FASTA}/{{sample}}_VP2.fasta"
     output:
-        "data/fasta_cleaned/{sample}_VP2_qc.fasta"
+        f"{CLEAN_FASTA}/{{sample}}_VP2_qc.fasta"
     conda:
         "envs/alignment.yaml"
     shell:
-        "python scripts/sanitize_sequences.py {input} {output}"
+        "python scripts/sanitize_sequences.py {input} {output} --config config.yaml"
 
 rule build_alignment_pool:
     input:
-        expand("data/fasta_cleaned/{sample}_VP2_qc.fasta", sample=config["samples"])
+        expand(f"{CLEAN_FASTA}/{{sample}}_VP2_qc.fasta", sample=config["samples"])
     output:
-        "data/protein/master_pool.fasta"
+        PATHS["master_protein_fasta"]
     conda:
         "envs/alignment.yaml"
     shell:
@@ -88,37 +107,41 @@ rule build_alignment_pool:
 
 rule make_canine_blastdb:
     input:
-        fasta = "data/reference/dog_proteome.fa"
+        fasta = config["databases"]["dog_proteome_fasta"]
     output:
-        phr = "data/reference/dog_db.phr",
-        pin = "data/reference/dog_db.pin",
-        psq = "data/reference/dog_db.psq"
+        phr = f"{DOG_DB}.phr",
+        pin = f"{DOG_DB}.pin",
+        psq = f"{DOG_DB}.psq"
     conda:
         "envs/blast.yaml"
+    params:
+        db_base = DOG_DB,
+        makeblastdb = TOOLS["makeblastdb"].get("path") or TOOLS["makeblastdb"]["command"]
     shell:
-        "makeblastdb -in {input.fasta} -dbtype prot -out data/reference/dog_db"
+        "{params.makeblastdb} -in {input.fasta} -dbtype prot -out {params.db_base}"
 
 rule blastp:
     input:
-        query  = "data/fasta_cleaned/{sample}_VP2_qc.fasta",
-        db_phr = "data/reference/dog_db.phr",
-        db_pin = "data/reference/dog_db.pin",
-        db_psq = "data/reference/dog_db.psq"
+        query  = f"{CLEAN_FASTA}/{{sample}}_VP2_qc.fasta",
+        db_phr = f"{DOG_DB}.phr",
+        db_pin = f"{DOG_DB}.pin",
+        db_psq = f"{DOG_DB}.psq"
     output:
-        txt = "data/blast/{sample}_blastp.txt"
+        txt = f"{BLAST_DIR}/{{sample}}_blastp.txt"
     params:
-        db_base = "data/reference/dog_db"
+        db_base = DOG_DB,
+        config_path = "config.yaml"
     conda:
         "envs/blast.yaml"
     shell:
-        "python scripts/vp2_blastp.py {input.query} {params.db_base} {output.txt}"
+        "python scripts/vp2_blastp.py {input.query} {params.db_base} {output.txt} --config {params.config_path}"
 
 rule filter_host_homology:
     input:
-        blast_txt = expand("data/blast/{sample}_blastp.txt", sample=config["samples"])
+        blast_txt = expand(f"{BLAST_DIR}/{{sample}}_blastp.txt", sample=config["samples"])
     output:
-        csv         = "results/filtering/host_homology_exclusion.csv",
-        json_report = "results/host_exclusion_report.json"
+        csv         = PATHS["host_exclusion_csv"],
+        json_report = PATHS["host_exclusion_report"]
     conda:
         "envs/blast.yaml"
     shell:
@@ -126,7 +149,8 @@ rule filter_host_homology:
         python scripts/filter_host_homology.py \
             --inputs {input.blast_txt} \
             --output_csv {output.csv} \
-            --output_json {output.json_report}
+            --output_json {output.json_report} \
+            --config config.yaml
         """
 
 
@@ -136,25 +160,29 @@ rule filter_host_homology:
 
 rule mafft:
     input:
-        "data/protein/master_pool.fasta"
+        PATHS["master_protein_fasta"]
     output:
-        "data/align/All_VP2_aligned.fasta"
+        PATHS["aligned_proteins"]
     params:
-        threads = config["alignment"].get("threads", 4)
+        threads = config["alignment"]["threads"],
+        mode = config["alignment"]["mode"],
+        maxiterate = config["alignment"]["maxiterate"],
+        gap_penalty = config["alignment"]["gap_penalty"],
+        mafft = TOOLS["mafft"].get("path") or TOOLS["mafft"]["command"]
     conda:
         "envs/alignment.yaml"
     shell:
-        "mafft --maxiterate 1000 --globalpair --thread {params.threads} {input} > {output}"
+        "{params.mafft} {params.mode} --maxiterate {params.maxiterate} --op {params.gap_penalty} --thread {params.threads} {input} > {output}"
 
 rule conservation:
     input:
-        aligned = "data/align/All_VP2_aligned.fasta"
+        aligned = PATHS["aligned_proteins"]
     output:
-        csv = "data/align/VP2_conservation.csv"
+        csv = PATHS["conservation_csv"]
     conda:
         "envs/alignment.yaml"
     shell:
-        "python scripts/calculate_conservation.py {input.aligned} {output.csv}"
+        "python scripts/calculate_conservation.py {input.aligned} {output.csv} --config config.yaml"
 
 
 # =============================================================================
@@ -163,10 +191,10 @@ rule conservation:
 
 rule netmhcpan:
     input:
-        fasta = "data/protein/master_pool.fasta",
-        universe = "results/filtering/host_homology_exclusion.csv"
+        fasta = PATHS["master_protein_fasta"],
+        universe = PATHS["host_exclusion_csv"]
     output:
-        csv = "data/align/vp2_strong_binders.csv"
+        csv = PATHS["mhc1_predictions_csv"]
     params:
         alleles = ",".join(config["tcell_epitope"]["dla_alleles"]),
         lengths = ",".join(str(l) for l in config["tcell_epitope"]["peptide_lengths"]),
@@ -180,15 +208,16 @@ rule netmhcpan:
             '{params.alleles}' \
             '{params.lengths}' \
             {params.rank} \
-            {output.csv}
+            {output.csv} \
+            --config config.yaml
         """
 
 rule iedb_mhc2:
     input:
-        fasta = "data/protein/master_pool.fasta",
-        universe = "results/filtering/host_homology_exclusion.csv"
+        fasta = PATHS["master_protein_fasta"],
+        universe = PATHS["host_exclusion_csv"]
     output:
-        csv = "results/immunogenicity/iedb_mhc2_predictions.csv"
+        csv = f"{IMMUNO_DIR}/iedb_mhc2_predictions.csv"
     params:
         method  = config["mhc2_epitope"].get("method", "nn_align"),
         alleles = ",".join(config["mhc2_epitope"]["dla_mhc2_alleles"]),
@@ -202,21 +231,21 @@ rule iedb_mhc2:
             --method {params.method} \
             --alleles '{params.alleles}' \
             --lengths '{params.lengths}' \
-            --output {output.csv}
+            --output {output.csv} \
+            --config config.yaml
         """
 
 rule bepipred3:
     input:
-        fasta = "data/protein/master_pool.fasta",
-        universe = "results/filtering/host_homology_exclusion.csv"
+        fasta = PATHS["master_protein_fasta"],
+        universe = PATHS["host_exclusion_csv"]
     output:
-        preds        = "results/bcell/Bcell_epitope_preds.fasta",
-        top_pct_pred = "results/bcell/Bcell_epitope_top_20pct_preds.fasta",
-        lin_pred     = "results/bcell/Bcell_linepitope_top_20pct_preds.fasta",
-        raw_csv      = "results/bcell/raw_output.csv"
+        preds        = f"{BCELL_DIR}/Bcell_epitope_preds.fasta",
+        top_pct_pred = f"{BCELL_DIR}/Bcell_epitope_top_20pct_preds.fasta",
+        lin_pred     = f"{BCELL_DIR}/Bcell_linepitope_top_20pct_preds.fasta",
+        raw_csv      = f"{BCELL_DIR}/raw_output.csv"
     params:
-        script      = config["bcell_epitope"]["script_path"],
-        out_dir     = "results/bcell",
+        out_dir     = BCELL_DIR,
         pred_mode   = config["bcell_epitope"]["prediction_mode"],
         threshold   = config["bcell_epitope"]["threshold"],
         window_size = config["bcell_epitope"]["rolling_window_size"]
@@ -224,24 +253,25 @@ rule bepipred3:
         "envs/bepipred3.yaml"
     shell:
         """
-        python {params.script} \
-            -i {input.fasta} \
-            -o {params.out_dir} \
-            -pred {params.pred_mode} \
-            -t {params.threshold} \
-            -rolling_window_size {params.window_size}
+        python scripts/run_bepipred3.py \
+            --input {input.fasta} \
+            --output-dir {params.out_dir} \
+            --prediction-mode {params.pred_mode} \
+            --threshold {params.threshold} \
+            --window-size {params.window_size} \
+            --config config.yaml
         """
 
 rule parse_bcell_coords:
     input:
-        fasta = "results/bcell/Bcell_linepitope_top_20pct_preds.fasta",
-        csv   = "results/bcell/raw_output.csv"
+        fasta = f"{BCELL_DIR}/Bcell_linepitope_top_20pct_preds.fasta",
+        csv   = f"{BCELL_DIR}/raw_output.csv"
     output:
-        summary = "results/bcell/bcell_linear_epitopes_summary.csv"
+        summary = f"{BCELL_DIR}/bcell_linear_epitopes_summary.csv"
     conda:
         "envs/canine_immuno.yaml"
     shell:
-        "python scripts/extract_bcell_coordinates.py {input.fasta} {input.csv} {output.summary}"
+        "python scripts/extract_bcell_coordinates.py {input.fasta} {input.csv} {output.summary} --config config.yaml"
 
 
 # =============================================================================
@@ -249,40 +279,40 @@ rule parse_bcell_coords:
 # =============================================================================
 
 rule toxinpred3_mhc1:
-    input:  csv = "data/align/vp2_strong_binders.csv"
-    output: csv = "results/safety/mhc1_toxinpred3_checked.csv"
+    input:  csv = PATHS["mhc1_predictions_csv"]
+    output: csv = f"{SAFETY_DIR}/mhc1_toxinpred3_checked.csv"
     conda:  "envs/toxinpred3.yaml"
-    shell:  "python scripts/run_toxinpred3.py --input {input.csv} --output {output.csv}"
+    shell:  "python scripts/run_toxinpred3.py --input {input.csv} --output {output.csv} --config config.yaml"
 
 rule algpred2_mhc1:
-    input:  csv = "results/safety/mhc1_toxinpred3_checked.csv"
-    output: csv = "results/safety/mhc1_algpred2_checked.csv"
+    input:  csv = f"{SAFETY_DIR}/mhc1_toxinpred3_checked.csv"
+    output: csv = f"{SAFETY_DIR}/mhc1_algpred2_checked.csv"
     conda:  "envs/algpred2.yaml"
-    shell:  "python scripts/run_algpred2.py --input {input.csv} --output {output.csv}"
+    shell:  "python scripts/run_algpred2.py --input {input.csv} --output {output.csv} --config config.yaml"
 
 rule toxinpred3_mhc2:
-    input:  csv = "results/immunogenicity/iedb_mhc2_predictions.csv"
-    output: csv = "results/safety/mhc2_toxinpred3_checked.csv"
+    input:  csv = f"{IMMUNO_DIR}/iedb_mhc2_predictions.csv"
+    output: csv = f"{SAFETY_DIR}/mhc2_toxinpred3_checked.csv"
     conda:  "envs/toxinpred3.yaml"
-    shell:  "python scripts/run_toxinpred3.py --input {input.csv} --output {output.csv}"
+    shell:  "python scripts/run_toxinpred3.py --input {input.csv} --output {output.csv} --config config.yaml"
 
 rule algpred2_mhc2:
-    input:  csv = "results/safety/mhc2_toxinpred3_checked.csv"
-    output: csv = "results/safety/mhc2_algpred2_checked.csv"
+    input:  csv = f"{SAFETY_DIR}/mhc2_toxinpred3_checked.csv"
+    output: csv = f"{SAFETY_DIR}/mhc2_algpred2_checked.csv"
     conda:  "envs/algpred2.yaml"
-    shell:  "python scripts/run_algpred2.py --input {input.csv} --output {output.csv}"
+    shell:  "python scripts/run_algpred2.py --input {input.csv} --output {output.csv} --config config.yaml"
 
 rule toxinpred3_bcell:
-    input:  csv = "results/bcell/bcell_linear_epitopes_summary.csv"
-    output: csv = "results/safety/bcell_toxinpred3_checked.csv"
+    input:  csv = f"{BCELL_DIR}/bcell_linear_epitopes_summary.csv"
+    output: csv = f"{SAFETY_DIR}/bcell_toxinpred3_checked.csv"
     conda:  "envs/toxinpred3.yaml"
-    shell:  "python scripts/run_toxinpred3.py --input {input.csv} --output {output.csv}"
+    shell:  "python scripts/run_toxinpred3.py --input {input.csv} --output {output.csv} --config config.yaml"
 
 rule algpred2_bcell:
-    input:  csv = "results/safety/bcell_toxinpred3_checked.csv"
-    output: csv = "results/safety/bcell_algpred2_checked.csv"
+    input:  csv = f"{SAFETY_DIR}/bcell_toxinpred3_checked.csv"
+    output: csv = f"{SAFETY_DIR}/bcell_algpred2_checked.csv"
     conda:  "envs/algpred2.yaml"
-    shell:  "python scripts/run_algpred2.py --input {input.csv} --output {output.csv}"
+    shell:  "python scripts/run_algpred2.py --input {input.csv} --output {output.csv} --config config.yaml"
 
 
 # =============================================================================
@@ -290,12 +320,12 @@ rule algpred2_bcell:
 # =============================================================================
 
 rule iedb_mhc1_processing:
-    input:   peptides = "data/align/vp2_strong_binders.csv"
-    output:  csv = "results/immunogenicity/iedb_mhc1_processing.csv"
+    input:   peptides = PATHS["mhc1_predictions_csv"]
+    output:  csv = f"{IMMUNO_DIR}/iedb_mhc1_processing.csv"
     params:
         method     = config["mhc1_processing"].get("method", "recommended"),
         proteasome = config["mhc1_processing"].get("proteasome", "immuno"),
-        alleles    = ",".join(config["tcell_epitope"]["dla_alleles"])
+        alleles    = ",".join(config["mhc1_processing"]["dla_mhc1_alleles"])
     conda:
         "envs/iedb_tools.yaml"
     shell:
@@ -305,22 +335,23 @@ rule iedb_mhc1_processing:
             --method {params.method} \
             --proteasome {params.proteasome} \
             --alleles '{params.alleles}' \
-            --output {output.csv}
+            --output {output.csv} \
+            --config config.yaml
         """
 
 rule deeptmhmm:
-    input:   fasta = "data/protein/master_pool.fasta"
-    output:  csv = "results/topology/vp2_tm_topology.csv"
+    input:   fasta = PATHS["master_protein_fasta"]
+    output:  csv = PATHS["topology_csv"]
     conda:   "envs/deeptmhmm.yaml"
-    shell:   "python scripts/deeptmhmm_batch.py {input.fasta} {output.csv}"
+    shell:   "python scripts/deeptmhmm_batch.py {input.fasta} {output.csv} --config config.yaml"
 
 rule ensemble_immunogenicity:
     input:
-        mhc2  = "results/immunogenicity/iedb_mhc2_predictions.csv",
-        proc  = "results/immunogenicity/iedb_mhc1_processing.csv",
-        breed = "config/breed_weights.csv"
+        mhc2  = f"{IMMUNO_DIR}/iedb_mhc2_predictions.csv",
+        proc  = f"{IMMUNO_DIR}/iedb_mhc1_processing.csv",
+        breed = config["ensemble"]["breed_weights_file"]
     output:
-        ensemble = "results/immunogenicity/ensemble_immunogenicity.csv"
+        ensemble = f"{IMMUNO_DIR}/ensemble_immunogenicity.csv"
     params:
         w_mhc2 = config["ensemble"]["weight_mhc2"],
         w_proc = config["ensemble"]["weight_processing"],
@@ -336,7 +367,8 @@ rule ensemble_immunogenicity:
             --output {output.ensemble} \
             --weight-mhc2 {params.w_mhc2} \
             --weight-processing {params.w_proc} \
-            --weight-population {params.w_pop}
+            --weight-population {params.w_pop} \
+            --config config.yaml
         """
 
 
@@ -346,15 +378,15 @@ rule ensemble_immunogenicity:
 
 rule canine_epitope_rank:
     input:
-        mhc_csv      = "results/safety/mhc1_algpred2_checked.csv",
-        tm_csv       = "results/topology/vp2_tm_topology.csv",
-        cons_csv     = "data/align/VP2_conservation.csv",
-        blast_filter = "results/filtering/host_homology_exclusion.csv",
-        ensemble_csv = "results/immunogenicity/ensemble_immunogenicity.csv",
-        tox_csv      = "results/safety/mhc1_toxinpred3_checked.csv",  
-        allergen_csv = "results/safety/mhc1_algpred2_checked.csv"    
+        mhc_csv      = f"{SAFETY_DIR}/mhc1_algpred2_checked.csv",
+        tm_csv       = PATHS["topology_csv"],
+        cons_csv     = PATHS["conservation_csv"],
+        blast_filter = PATHS["host_exclusion_csv"],
+        ensemble_csv = f"{IMMUNO_DIR}/ensemble_immunogenicity.csv",
+        tox_csv      = f"{SAFETY_DIR}/mhc1_toxinpred3_checked.csv",
+        allergen_csv = f"{SAFETY_DIR}/mhc1_algpred2_checked.csv"
     output:
-        tcell_out    = "results/final_ranked_tcell_epitopes.csv"
+        tcell_out    = PATHS["final_ranked_tcell_csv"]
     conda:
         "envs/canine_immuno.yaml"
     shell:
@@ -378,18 +410,18 @@ rule canine_epitope_rank:
 
 rule clean_and_intersect_epitopes:
     input:
-        mhc1_raw    = "results/final_ranked_tcell_epitopes.csv",
-        mhc2_raw    = "results/safety/mhc2_algpred2_checked.csv",
-        bcell_raw   = "results/safety/bcell_algpred2_checked.csv",
-        cons_csv    = "data/align/VP2_conservation.csv",
-        blast_csv   = "results/filtering/host_homology_exclusion.csv",
-        mhc1_tox    = "results/safety/mhc1_toxinpred3_checked.csv",   
-        mhc1_alg    = "results/safety/mhc1_algpred2_checked.csv"      
+        mhc1_raw    = PATHS["final_ranked_tcell_csv"],
+        mhc2_raw    = f"{SAFETY_DIR}/mhc2_algpred2_checked.csv",
+        bcell_raw   = f"{SAFETY_DIR}/bcell_algpred2_checked.csv",
+        cons_csv    = PATHS["conservation_csv"],
+        blast_csv   = PATHS["host_exclusion_csv"],
+        mhc1_tox    = f"{SAFETY_DIR}/mhc1_toxinpred3_checked.csv",
+        mhc1_alg    = f"{SAFETY_DIR}/mhc1_algpred2_checked.csv"
     output:
-        mhc1_clean  = "results/consensus/filtered_mhc1_epitopes.csv",
-        mhc2_clean  = "results/consensus/filtered_mhc2_epitopes.csv",
-        bcell_clean = "results/consensus/filtered_bcell_epitopes.csv",
-        overlapping = "results/consensus/overlapping_consensus_regions.csv"
+        mhc1_clean  = f"{CONSENSUS_DIR}/filtered_mhc1_epitopes.csv",
+        mhc2_clean  = f"{CONSENSUS_DIR}/filtered_mhc2_epitopes.csv",
+        bcell_clean = f"{CONSENSUS_DIR}/filtered_bcell_epitopes.csv",
+        overlapping = f"{CONSENSUS_DIR}/overlapping_consensus_regions.csv"
     conda:
         "envs/canine_immuno.yaml"
     shell:
@@ -402,7 +434,8 @@ rule clean_and_intersect_epitopes:
             --blast {input.blast_csv} \
             --tox {input.mhc1_tox} \
             --alg {input.mhc1_alg} \
-            --out_dir results/consensus
+            --out_dir {CONSENSUS_DIR} \
+            --config config.yaml
         """
 
 # -----------------------------------------------------------------------------
@@ -410,10 +443,10 @@ rule clean_and_intersect_epitopes:
 # -----------------------------------------------------------------------------
 rule hpepdock_screening:
     input:
-        csv = "results/consensus/filtered_mhc1_epitopes.csv",
+        csv = f"{CONSENSUS_DIR}/filtered_mhc1_epitopes.csv",
         pdb_dir = config["paths"]["mhc_structures"]
     output:
-        log = "results/docking/hpepdock_submissions.txt"
+        log = f"{PATHS['docking']}/hpepdock_submissions.txt"
     params:
         receptors = config.get("docking", {}).get("receptors", []),
         url       = config.get("docking", {}).get("server_url", ""),
@@ -430,7 +463,8 @@ rule hpepdock_screening:
             --url '{params.url}' \
             --email '{params.email}' \
             --retries {params.retries} \
-            --receptors "{params.receptors}"
+            --receptors {params.receptors} \
+            --config config.yaml
         """
 
 # =============================================================================
@@ -439,78 +473,78 @@ rule hpepdock_screening:
 
 rule adcp_extract_native_peptide:
     input:
-        pdb = "data/MHC_I/{receptor}.pdb"
+        pdb = f"{PATHS['mhc_structures']}/{{receptor}}.pdb"
     output:
-        peptide_pdbqt = "data/MHC_I/{receptor}_native_peptide.pdbqt"
-    params:
-        bin_path = config.get("docking", {}).get("adfr_suite_path", "")
+        peptide_pdbqt = f"{PATHS['mhc_structures']}/{{receptor}}_native_peptide.pdbqt"
     conda:
         "envs/iedb_tools.yaml"
     shell:
         """
-        cd data/MHC_I
-        
-        awk 'BEGIN {{FS=""}} /^ATOM/ && substr($0, 22, 1)=="C" {{print $0}}' {wildcards.receptor}.pdb > {wildcards.receptor}_temp_pep.pdb
-        
-        
-        {params.bin_path}/prepare_ligand \
-            -l {wildcards.receptor}_temp_pep.pdb \
-            -o {wildcards.receptor}_native_peptide.pdbqt \
+        awk 'BEGIN {{FS=""}} /^ATOM/ && substr($0, 22, 1)=="C" {{print $0}}' {input.pdb} > {MHC_DIR}/{wildcards.receptor}_temp_pep.pdb
+        python scripts/run_adfrsuite.py \
+            --tool prepare_ligand \
+            --output {output.peptide_pdbqt} \
+            --config config.yaml \
+            -- \
+            -l {MHC_DIR}/{wildcards.receptor}_temp_pep.pdb \
+            -o {output.peptide_pdbqt} \
             -A hydrogens
 
-        rm {wildcards.receptor}_temp_pep.pdb
+        rm {MHC_DIR}/{wildcards.receptor}_temp_pep.pdb
         """
 
 rule adcp_prepare_receptor:
     input:
-        pdb = "data/MHC_I/{receptor}.pdb"
+        pdb = f"{PATHS['mhc_structures']}/{{receptor}}.pdb"
     output:
-        pdbqt = "data/MHC_I/{receptor}_receptor.pdbqt"
-    params:
-        bin_path = config.get("docking", {}).get("adfr_suite_path", "")
+        pdbqt = f"{PATHS['mhc_structures']}/{{receptor}}_receptor.pdbqt"
     conda:
         "envs/iedb_tools.yaml"
     shell:
         """
-        awk 'BEGIN {{FS=""}} /^ATOM/ && (substr($0, 22, 1)=="A" || substr($0, 22, 1)=="B") {{print $0}}' {input.pdb} > data/MHC_I/{wildcards.receptor}_clean_target.pdb
-        {params.bin_path}/prepare_receptor \
-            -r data/MHC_I/{wildcards.receptor}_clean_target.pdb \
+        awk 'BEGIN {{FS=""}} /^ATOM/ && (substr($0, 22, 1)=="A" || substr($0, 22, 1)=="B") {{print $0}}' {input.pdb} > {MHC_DIR}/{wildcards.receptor}_clean_target.pdb
+        python scripts/run_adfrsuite.py \
+            --tool prepare_receptor \
+            --output {output.pdbqt} \
+            --config config.yaml \
+            -- \
+            -r {MHC_DIR}/{wildcards.receptor}_clean_target.pdb \
             -o {output.pdbqt} \
             -A hydrogens \
             -U nsw
-        rm data/MHC_I/{wildcards.receptor}_clean_target.pdb
+        rm {MHC_DIR}/{wildcards.receptor}_clean_target.pdb
         """
 
 rule adcp_generate_affinity_grid:
     input:
-        receptor_pdbqt = "data/MHC_I/{receptor}_receptor.pdbqt",
-        peptide_pdbqt  = "data/MHC_I/{receptor}_native_peptide.pdbqt"
+        receptor_pdbqt = f"{PATHS['mhc_structures']}/{{receptor}}_receptor.pdbqt",
+        peptide_pdbqt  = f"{PATHS['mhc_structures']}/{{receptor}}_native_peptide.pdbqt"
     output:
-        trg = "data/MHC_I/{receptor}_receptor.trg"
-    params:
-        bin_path = config.get("docking", {}).get("adfr_suite_path", ""),
-        padding  = config.get("docking", {}).get("grid_padding", 4.0)
+        trg = f"{PATHS['mhc_structures']}/{{receptor}}_receptor.trg"
     conda:
         "envs/iedb_tools.yaml"
     shell:
         """
-        {params.bin_path}/agfr \
+        python scripts/run_adfrsuite.py \
+            --tool agfr \
+            --output {output.trg} \
+            --config config.yaml \
+            -- \
             -r {input.receptor_pdbqt} \
             -l {input.peptide_pdbqt} \
             -b ligand \
             -P {params.padding} \
-            -o data/MHC_I/{wildcards.receptor}_receptor
+            -o {MHC_DIR}/{wildcards.receptor}_receptor
         """
 
 rule adcp_screening:
     input:
-        csv = "results/consensus/filtered_mhc1_epitopes.csv",
+        csv = f"{CONSENSUS_DIR}/filtered_mhc1_epitopes.csv",
         # Ensures all receptors in your config are fully mapped and ready before docking
-        trgs = expand("data/MHC_I/{receptor}_receptor.trg", receptor=config.get("docking", {}).get("receptors", []))
+        trgs = expand(f"{PATHS['mhc_structures']}/{{receptor}}_receptor.trg", receptor=config.get("docking", {}).get("receptors", []))
     output:
-        summary = "results/docking/adcp_screening_summary.txt"
+        summary = f"{PATHS['docking']}/adcp_screening_summary.txt"
     params:
-        bin_path = config.get("docking", {}).get("adfr_suite_path", ""),
         replicas = config.get("docking", {}).get("replicas", 40),
         steps    = config.get("docking", {}).get("steps", 1000000),
         threads  = config.get("docking", {}).get("threads", 4)
@@ -521,10 +555,10 @@ rule adcp_screening:
         python scripts/submit_adcp.py \
             --csv {input.csv} \
             --output {output.summary} \
-            --bin-path {params.bin_path} \
             --replicas {params.replicas} \
             --steps {params.steps} \
-            --threads {params.threads}
+            --threads {params.threads} \
+            --config config.yaml
         """
 # =============================================================================
 # MODULE 9: VACCINE ASSEMBLY CHIMERA
@@ -532,12 +566,12 @@ rule adcp_screening:
 
 rule construct_vaccine:
     input:
-        overlapping = "results/consensus/overlapping_consensus_regions.csv",
-        mhc1_clean  = "results/consensus/filtered_mhc1_epitopes.csv",
-        mhc2_clean  = "results/consensus/filtered_mhc2_epitopes.csv",
-        bcell_clean = "results/consensus/filtered_bcell_epitopes.csv"
+        overlapping = f"{CONSENSUS_DIR}/overlapping_consensus_regions.csv",
+        mhc1_clean  = f"{CONSENSUS_DIR}/filtered_mhc1_epitopes.csv",
+        mhc2_clean  = f"{CONSENSUS_DIR}/filtered_mhc2_epitopes.csv",
+        bcell_clean = f"{CONSENSUS_DIR}/filtered_bcell_epitopes.csv"
     output:
-        fasta = "results/vaccine_construct/final_vaccine_sequence.fasta"
+        fasta = f"{VACCINE_DIR}/final_vaccine_sequence.fasta"
     conda:
         "envs/canine_immuno.yaml"
     shell:
@@ -547,5 +581,6 @@ rule construct_vaccine:
             --mhc1 {input.mhc1_clean} \
             --mhc2 {input.mhc2_clean} \
             --bcell {input.bcell_clean} \
-            --output {output.fasta}
+            --output {output.fasta} \
+            --config config.yaml
         """

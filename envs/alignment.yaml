@@ -5,6 +5,7 @@ channels:
   - defaults
 dependencies:
   - python=3.10
+  - pyyaml
   - mafft>=7.500
   - biopython>=1.80
   - pandas            

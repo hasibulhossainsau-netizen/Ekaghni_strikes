@@ -3,6 +3,8 @@ import sys
 import pandas as pd
 from collections import Counter
 from pathlib import Path
+import argparse
+from pipeline_config import load_config, resolve_path
 
 def parse_fasta(fasta_path):
     sequences = []
@@ -21,12 +23,14 @@ def parse_fasta(fasta_path):
     return sequences
 
 def main():
-    if len(sys.argv) < 3:
-        print("Usage: python calculate_conservation.py <input_aligned_fasta> <output_csv>")
-        sys.exit(1)
-        
-    input_fasta = sys.argv[1]
-    output_csv = sys.argv[2]
+    parser = argparse.ArgumentParser()
+    parser.add_argument("input_aligned_fasta")
+    parser.add_argument("output_csv")
+    parser.add_argument("--config", default=None)
+    args = parser.parse_args()
+    config = load_config(args.config)
+    input_fasta = resolve_path(args.input_aligned_fasta, config)
+    output_csv = resolve_path(args.output_csv, config)
     
     if not Path(input_fasta).exists():
         print(f"Error: Input file {input_fasta} not found.")
@@ -67,8 +71,10 @@ def main():
         
     df = pd.DataFrame(conservation_data)
     
-    window_size = 9 
-    df['window_9mer_avg'] = df['raw_score'].rolling(window=window_size, min_periods=1).mean().round(4)
+    window_size = config["conservation"]["window_size"]
+    df[f'window_{window_size}mer_avg'] = df['raw_score'].rolling(
+        window=window_size, min_periods=1
+    ).mean().round(4)
     
     Path(output_csv).parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(output_csv, index=False)

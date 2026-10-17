@@ -1,0 +1,25 @@
+version: "3.8"
+
+services:
+  ekaghni:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ekaghni-strikes:latest
+    working_dir: /workspace
+    user: "${LOCAL_UID:-1000}:${LOCAL_GID:-1000}"
+    environment:
+      PIPELINE_MODE: "${PIPELINE_MODE:-smoke}"
+      CORES: "${CORES:-4}"
+    volumes:
+      - .:/workspace
+      - "${EXTERNAL_TOOLS_DIR:-./tools}:/opt/external-tools:ro"
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        case "$${PIPELINE_MODE}" in
+          smoke) exec make smoke-test mock-test ;;
+          full) exec make run USE_CONDA= ;;
+          *) echo "PIPELINE_MODE must be 'smoke' or 'full' (got '$${PIPELINE_MODE}')" >&2; exit 2 ;;
+        esac

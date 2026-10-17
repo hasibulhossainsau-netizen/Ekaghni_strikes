@@ -3,6 +3,7 @@ import argparse
 import pandas as pd
 import os
 import sys
+from pipeline_config import load_config, resolve_path
 
 def parse_args():
     parser = argparse.ArgumentParser(
@@ -13,9 +14,10 @@ def parse_args():
     parser.add_argument("--mhc2", required=True, help="Filtered MHC II epitopes CSV")
     parser.add_argument("--bcell", required=True, help="Filtered B-cell linear epitopes CSV")
     parser.add_argument("--output", required=True, help="Target path for final structural FASTA export")
+    parser.add_argument("--config", default=None, help="Path to pipeline config.yaml")
     return parser.parse_args()
 
-def get_peptide_list(df, max_count=5):
+def get_peptide_list(df, max_count):
     """
     Extracts valid amino acid sequence strings based on exact case-insensitive matches.
     Defensively strips out structural IDs, metadata rows, and header artifacts.
@@ -60,6 +62,14 @@ def get_peptide_list(df, max_count=5):
 
 def main():
     args = parse_args()
+    config = load_config(args.config)
+    args.intersected = resolve_path(args.intersected, config)
+    args.mhc1 = resolve_path(args.mhc1, config)
+    args.mhc2 = resolve_path(args.mhc2, config)
+    args.bcell = resolve_path(args.bcell, config)
+    args.output = resolve_path(args.output, config)
+    construct = config["vaccine_construct"]
+    max_epitopes = construct["max_epitopes_per_class"]
 
     print("[PROCESSING] Loading filtered consensus epitope datasets...")
     mhc1_df = pd.read_csv(args.mhc1)
@@ -67,28 +77,29 @@ def main():
     bcell_df = pd.read_csv(args.bcell)
 
     # Extract sequence collections cleanly
-    mhc1_peps = get_peptide_list(mhc1_df, max_count=5)
-    mhc2_peps = get_peptide_list(mhc2_df, max_count=5)
-    bcell_peps = get_peptide_list(bcell_df, max_count=5)
+    mhc1_peps = get_peptide_list(mhc1_df, max_count=max_epitopes)
+    mhc2_peps = get_peptide_list(mhc2_df, max_count=max_epitopes)
+    bcell_peps = get_peptide_list(bcell_df, max_count=max_epitopes)
 
     print(f"[INFO] Parsed MHC-I Epitopes:  {mhc1_peps}")
     print(f"[INFO] Parsed MHC-II Epitopes: {mhc2_peps}")
     print(f"[INFO] Parsed B-Cell Epitopes: {bcell_peps}")
 
     # 1. Adjuvant: Flagellin FliC from Salmonella enterica (Full immunogenic segment)
-    adjuvant = "MAQVINTNSLSLLTQNNLNKSQSALGTAIERLSSGLRINSAKDDAAGQAIANRFTANIKGLTQASRNANDGISIAQTTEGALNEINNNLQRVRELAVQSANSTNSQSDLDSIQAEITQRLNEIDRVSGQTQFNGVKVLAQDNTLT"
+    adjuvant = construct["adjuvant"]
     
     # 2. Universal T-helper Element: PADRE Sequence 
-    padre = "AKFVAAWTLKAAA"
+    padre = construct["helper_epitope"]
 
     # 3. Spacers & Linkers
-    adjuvant_linker = "EAAAK"   # Rigid separation between FliC and PADRE
-    padre_linker = "GGGS"       # Flexible link from PADRE into epitope pools
+    linkers = construct["linkers"]
+    adjuvant_linker = linkers["adjuvant_helper"]
+    padre_linker = linkers["helper_mhc1"]
 
     # 4. Construct Domain Sub-chains using explicit joint mechanics
-    mhc1_chain = "AAY".join(mhc1_peps) if mhc1_peps else ""
-    mhc2_chain = "GGGS".join(mhc2_peps) if mhc2_peps else ""
-    bcell_chain = "GPGPG".join(bcell_peps) if bcell_peps else ""
+    mhc1_chain = linkers["mhc1"].join(mhc1_peps) if mhc1_peps else ""
+    mhc2_chain = linkers["mhc2"].join(mhc2_peps) if mhc2_peps else ""
+    bcell_chain = linkers["bcell"].join(bcell_peps) if bcell_peps else ""
 
     # 5. Cascaded Vaccine String Assembly
     # Joins the segments strictly in the requested engineering order
@@ -98,9 +109,9 @@ def main():
         padre + 
         padre_linker + 
         mhc1_chain + 
-        "GGGS" + 
+        linkers["mhc1_mhc2"] +
         mhc2_chain + 
-        "GGGS" + 
+        linkers["mhc2_bcell"] +
         bcell_chain
     )
 

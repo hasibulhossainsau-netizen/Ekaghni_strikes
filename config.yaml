@@ -15,6 +15,7 @@ paths:
   root: "."
   data: "data"
   raw_genomes: "data/fasta"          
+  cleaned_genomes: "data/fasta_cleaned"
   proteins: "data/protein"           
   alignment: "data/align"            
   blast: "data/blast"                
@@ -27,6 +28,59 @@ paths:
   logs: "logs"
   scripts: "scripts"                 
   env: "envs"                        
+  filtering: "results/filtering"
+  immunogenicity: "results/immunogenicity"
+  bcell: "results/bcell"
+  safety: "results/safety"
+  topology: "results/topology"
+  consensus: "results/consensus"
+  vaccine_construct: "results/vaccine_construct"
+  master_protein_fasta: "data/protein/master_pool.fasta"
+  reference_vp2_fasta: "data/fasta/FJ197845_VP2.fasta"
+  aligned_proteins: "data/align/All_VP2_aligned.fasta"
+  conservation_csv: "data/align/VP2_conservation.csv"
+  mhc1_predictions_csv: "data/align/vp2_strong_binders.csv"
+  topology_csv: "results/topology/vp2_tm_topology.csv"
+  final_ranked_tcell_csv: "results/final_ranked_tcell_epitopes.csv"
+  docking_screening: "results/docking/virtual_screening"
+  host_exclusion_csv: "results/filtering/host_homology_exclusion.csv"
+  host_exclusion_report: "results/host_exclusion_report.json"
+
+# Executable paths may be absolute or relative to the repository. Bare command
+# names are resolved through PATH, including commands supplied by Conda envs.
+tools:
+  blastn:
+    command: "blastn"
+  blastp:
+    command: "blastp"
+  makeblastdb:
+    command: "makeblastdb"
+  mafft:
+    command: "mafft"
+  netmhcpan:
+    path: ""
+  toxinpred3:
+    command: "toxinpred3"
+  algpred2:
+    command: "algpred2"
+  bepipred3:
+    path: "tools/bepipred/BepiPred3_src/bepipred3_CLI.py"
+  deeptmhmm:
+    command: "biolib"
+    model: "DTU/DeepTMHMM:1.0.24"
+    timeout_seconds: 3600
+  prepare_ligand:
+    command: "prepare_ligand"
+  prepare_receptor:
+    command: "prepare_receptor"
+  agfr:
+    command: "agfr"
+  adcp:
+    command: "adcp"
+
+databases:
+  dog_proteome_fasta: "data/reference/dog_proteome.fa"
+  dog_blast_db: "data/reference/dog_db"
 
 # ==========================================================
 # SAMPLES (Input genome FASTA list, without extension)
@@ -41,7 +95,7 @@ samples:
 # INPUT REFERENCES
 # ==========================================================
 reference:
-  genome: "data/reference/FJ197845.fasta"   
+  genome: "data/fasta/FJ197845.fasta"
   vp2_gene:
     start: 2771
     end: 4535
@@ -52,7 +106,9 @@ reference:
 sequence_extraction:
   enabled: true
   method: "blastn"
-  evalue: 1e-5
+  evalue: 1.0e-5
+  max_target_seqs: 1
+  timeout_seconds: 120
   min_identity: 90
   keep_reverse_complement: true
 
@@ -73,6 +129,7 @@ conservation:
   enabled: true
   min_conservation_percent: 95
   min_region_length: 8
+  window_size: 9
   remove_gap_columns: true
   metrics:
     - shannon_entropy
@@ -85,10 +142,13 @@ conservation:
 host_homology:
   enabled: true
   database: "dog_proteome"
+  blastp:
+    max_target_seqs: 10
+    timeout_seconds: 120
   thresholds:
     identity: 80                  
     coverage: 70                  
-    evalue: 1e-3
+    evalue: 1.0e-3
   remove_host_hits: true
 
 # ==========================================================
@@ -100,6 +160,8 @@ tcell_epitope:
     tool: "NetMHCpan"
     version: "4.1"
   peptide_lengths: [8, 9, 10, 11]
+  netmhcpan:
+    command_threshold: -0.5
   
   dla_alleles:
     - "DLA-8803401"    
@@ -111,7 +173,7 @@ tcell_epitope:
     strong_binder_rank: 0.5    
     weak_binder_rank: 2.0
   
-  netmhcpan_path: "~/netMHCpan-4.1/netMHCpan"
+  timeout_seconds: 600
 
 # ==========================================================
 # IEDB MHC Class II Binding Predictions
@@ -120,6 +182,7 @@ mhc2_epitope:
   enabled: true
   method: "nn_align"               
   lengths: [15]                    
+  fallback_stride: 5
   
   dla_mhc2_alleles:
     - "HLA-DRB1*01:01"             
@@ -142,6 +205,7 @@ mhc1_processing:
     - "HLA-A*02:01"                
     - "HLA-B*07:02"                
     - "HLA-A*11:01"                
+  fallback_allele: "HLA-A*02:01"
 
 # ==========================================================
 # ENSEMBLE IMMUNOGENICITY SCORING (v2.4)
@@ -165,11 +229,23 @@ ensemble:
 # ==========================================================
 bcell_epitope:
   enabled: true
-  script_path: "tools/bepipred/BepiPred3_src/bepipred3_CLI.py"
   prediction_mode: "vt_pred"       
   threshold: 0.1512                
   rolling_window_size: 9           
   top_pct_cands: 20                
+
+vaccine_construct:
+  max_epitopes_per_class: 5
+  adjuvant: "MAQVINTNSLSLLTQNNLNKSQSALGTAIERLSSGLRINSAKDDAAGQAIANRFTANIKGLTQASRNANDGISIAQTTEGALNEINNNLQRVRELAVQSANSTNSQSDLDSIQAEITQRLNEIDRVSGQTQFNGVKVLAQDNTLT"
+  helper_epitope: "AKFVAAWTLKAAA"
+  linkers:
+    adjuvant_helper: "EAAAK"
+    helper_mhc1: "GGGS"
+    mhc1_mhc2: "GGGS"
+    mhc2_bcell: "GGGS"
+    mhc1: "AAY"
+    mhc2: "GGGS"
+    bcell: "GPGPG"
 
 # ==========================================================
 # MODULAR PEPTIDE-PROTEIN MOLECULAR DOCKING SWITCH INTERFACE
@@ -187,11 +263,13 @@ docking:
   timeout_seconds: 180
 
   # Settings used if tool: "adcp"
-  adfr_suite_path: "/home/YOUR_USERNAME/ADFRsuite_x86_64Linux_1.1dev/ADFRsuite-1.1dev/bin"
+
   grid_padding: 4.0
   replicas: 40
   steps: 1000000
   threads: 4
+  max_epitopes: 5
+  score_cutoff: 50.0
 
 # ==========================================================
 # SAFETY FILTERS
@@ -201,6 +279,8 @@ toxicity:
   tool: "ToxinPred3"
   remove_toxic_peptides: true
   threshold: 0.5
+  method: 1
+  timeout_seconds: 600
 
 allergenicity:
   enabled: true
@@ -208,6 +288,20 @@ allergenicity:
     - "AlgPred2"
   remove_allergens: true
   threshold: 0.5
+  timeout_seconds: 600
+
+external_services:
+  iedb:
+    mhc2_url: "https://tools-cluster-interface.iedb.org/tools_api/mhcii/"
+    processing_url: "https://tools-cluster-interface.iedb.org/tools_api/processing/"
+    timeout_seconds: 180
+  rcsb:
+    download_url: "https://files.rcsb.org/download/{pdb_id}.pdb"
+    timeout_seconds: 30
+  hpepdock:
+    retry_delay_seconds: 15
+    rate_limit_delay_seconds: 5
+    peptide_models: 1000
 
 # ==========================================================
 # STRUCTURAL ACCESSIBILITY & TOPOLOGY
@@ -279,6 +373,7 @@ environment:
 # ==========================================================
 qc:
   enabled: true
+  minimum_sequence_length: 100
   checks:
     - duplicate_sequences
     - empty_sequences

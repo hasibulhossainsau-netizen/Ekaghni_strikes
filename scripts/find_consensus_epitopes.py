@@ -4,6 +4,7 @@ import pandas as pd
 import numpy as np
 import os
 import sys
+from pipeline_config import load_config, resolve_path
 
 def parse_args():
     parser = argparse.ArgumentParser(
@@ -17,10 +18,14 @@ def parse_args():
     parser.add_argument("--cons", required=True, help="Positional conservation CSV")
     parser.add_argument("--blast", required=True, help="Host blast identity exclusion CSV")
     parser.add_argument("--out_dir", required=True, help="Target directory for consensus outputs")
+    parser.add_argument("--config", default=None, help="Path to pipeline config.yaml")
     return parser.parse_args()
 
 def main():
     args = parse_args()
+    config = load_config(args.config)
+    for argument in ("mhc1", "mhc2", "bcell", "tox", "alg", "cons", "blast", "out_dir"):
+        setattr(args, argument, resolve_path(getattr(args, argument), config))
     os.makedirs(args.out_dir, exist_ok=True)
 
     print("[PROCESSING] Loading safety and exclusion profiles...")

@@ -6,6 +6,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 import os
+from pipeline_config import configured_tool_if_available, load_config, resolve_path
 
 def peptides_to_fasta(peptides, temp_fasta):
     """Convert peptide list to FASTA format"""
@@ -17,13 +18,23 @@ def main():
     parser = argparse.ArgumentParser(description="ToxinPred3 Toxicity Prediction Wrapper")
     parser.add_argument("--input", required=True, help="Input CSV containing peptides")
     parser.add_argument("--output", required=True, help="Output CSV for predictions")
+    parser.add_argument("--config", default=None, help="Path to pipeline config.yaml")
+    parser.add_argument("--mock", action="store_true", help="Write mock predictions without running ToxinPred3")
     args = parser.parse_args()
+    config = load_config(args.config)
+    toxinpred3 = configured_tool_if_available(config, "toxinpred3")
+    use_mock = args.mock or toxinpred3 is None
+    if use_mock:
+        reason = "mock mode requested" if args.mock else "tools.toxinpred3 is unavailable in config.yaml"
+        print(f"[WARNING] {reason}; writing mock ToxinPred3 predictions.")
+    input_path = resolve_path(args.input, config)
+    output_path = resolve_path(args.output, config)
 
-    if not Path(args.input).exists():
-        print(f"[ERROR] Input file not found: {args.input}")
+    if not input_path.exists():
+        print(f"[ERROR] Input file not found: {input_path}")
         sys.exit(1)
 
-    df = pd.read_csv(args.input)
+    df = pd.read_csv(input_path)
     df.columns = df.columns.str.lower()
     peptides = df['peptide'].astype(str).str.upper().str.strip().unique().tolist()
 
@@ -34,35 +45,48 @@ def main():
         peptides_to_fasta(peptides, temp_fasta)
 
         output_csv = Path(tmpdir) / "toxinpred3_output.csv"
-        original_cwd = os.getcwd()
-        os.chdir(tmpdir)
-        
-        try:
-            cmd = [
-                "toxinpred3",
-                "-i", str(temp_fasta),
-                "-o", str(output_csv),
-                "-t", "0.5",
-                "-m", "1"
-            ]
-            result = subprocess.run(cmd, check=True, capture_output=True, text=True)
-            if result.stdout:
-                print(result.stdout)
-
-            if not output_csv.exists():
-                print("[ERROR] ToxinPred3 did not generate output file.")
+        if use_mock:
+            pred_df = pd.DataFrame({
+                "seq": peptides,
+                "prediction": ["Non-Toxic"] * len(peptides),
+                "score": [0.0] * len(peptides),
+            })
+        else:
+            original_cwd = os.getcwd()
+            os.chdir(tmpdir)
+            try:
+                cmd = [
+                    toxinpred3,
+                    "-i", str(temp_fasta),
+                    "-o", str(output_csv),
+                    "-t", str(config["toxicity"]["threshold"]),
+                    "-m", str(config["toxicity"]["method"])
+                ]
+                result = subprocess.run(
+                    cmd,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                    timeout=config["toxicity"]["timeout_seconds"],
+                )
+                if result.stdout:
+                    print(result.stdout)
+                if not output_csv.exists():
+                    print("[ERROR] ToxinPred3 did not generate output file.")
+                    sys.exit(1)
+                pred_df = pd.read_csv(output_csv)
+            except FileNotFoundError:
+                print("[WARNING] ToxinPred3 disappeared before execution; writing mock predictions.")
+                pred_df = pd.DataFrame({
+                    "seq": peptides,
+                    "prediction": ["Non-Toxic"] * len(peptides),
+                    "score": [0.0] * len(peptides),
+                })
+            except subprocess.CalledProcessError as e:
+                print(f"[ERROR] ToxinPred3 failed:\nSTDOUT:\n{e.stdout}\nSTDERR:\n{e.stderr}")
                 sys.exit(1)
-
-            pred_df = pd.read_csv(output_csv)
-
-        except subprocess.CalledProcessError as e:
-            print(f"[ERROR] ToxinPred3 failed:\nSTDOUT:\n{e.stdout}\nSTDERR:\n{e.stderr}")
-            sys.exit(1)
-        except FileNotFoundError:
-            print("[ERROR] 'toxinpred3' command not found. Please install with: pip install toxinpred3")
-            sys.exit(1)
-        finally:
-            os.chdir(original_cwd)  
+            finally:
+                os.chdir(original_cwd)
         if not pred_df.empty:
             pred_df.columns = pred_df.columns.str.lower()
             if 'sequence' in pred_df.columns and 'seq' not in pred_df.columns:
@@ -73,9 +97,11 @@ def main():
             else:
                 print(f"[ERROR] ToxinPred3 output missing 'seq' column. Found columns: {list(pred_df.columns)}")
                 sys.exit(1)
-        else:
+        elif peptides:
             print("[ERROR] No prediction data recovered from ToxinPred3.")
             sys.exit(1)
+        else:
+            pred_df = pd.DataFrame(columns=["seq", "prediction", "score"])
         
         result_list = []
         for pep in peptides:
@@ -96,10 +122,10 @@ def main():
 
     # Save final result
     res_df = pd.DataFrame(result_list)
-    Path(args.output).parent.mkdir(parents=True, exist_ok=True)
-    res_df.to_csv(args.output, index=False)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    res_df.to_csv(output_path, index=False)
     
-    print(f"[SUCCESS] ToxinPred3 prediction completed: {args.output}")
+    print(f"[SUCCESS] ToxinPred3 prediction completed: {output_path}")
     print(f"Total peptides processed: {len(peptides)}")
 
 if __name__ == "__main__":

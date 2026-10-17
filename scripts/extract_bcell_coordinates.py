@@ -3,6 +3,8 @@ import sys
 import re
 import pandas as pd
 from Bio import SeqIO
+import argparse
+from pipeline_config import load_config, resolve_path
 
 def extract_epitopes(fasta_path, csv_path, output_path):
     print(f"[INFO] Reading residue-level scores from: {csv_path}")
@@ -69,7 +71,15 @@ def extract_epitopes(fasta_path, csv_path, output_path):
     print(f"[SUCCESS] Written {len(out_df)} linear B-cell epitope coordinates to: {output_path}")
 
 if __name__ == "__main__":
-    if len(sys.argv) < 4:
-        print("Usage: python extract_bcell_coordinates.py <input.fasta> <raw_output.csv> <output_summary.csv>")
-        sys.exit(1)
-    extract_epitopes(sys.argv[1], sys.argv[2], sys.argv[3])
+    parser = argparse.ArgumentParser()
+    parser.add_argument("input_fasta")
+    parser.add_argument("raw_output_csv")
+    parser.add_argument("output_summary_csv")
+    parser.add_argument("--config", default=None)
+    args = parser.parse_args()
+    config = load_config(args.config)
+    extract_epitopes(
+        resolve_path(args.input_fasta, config),
+        resolve_path(args.raw_output_csv, config),
+        resolve_path(args.output_summary_csv, config),
+    )

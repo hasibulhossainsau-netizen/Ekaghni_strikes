@@ -10,17 +10,21 @@ import os
 import subprocess
 from pathlib import Path
 import pandas as pd
+import argparse
+from pipeline_config import configured_tool, load_config, resolve_path
 
-def run_deeptmhmm_bulk(fasta_path: Path, output_dir: Path):
+def run_deeptmhmm_bulk(
+    fasta_path: Path, output_dir: Path, executable: str, model: str, timeout: int
+):
     """Runs DeepTMHMM bulk prediction over the full protein FASTA via BioLib."""
     print(f"\n[PROCESSING] Running DeepTMHMM bulk prediction via BioLib...")
     
     absolute_fasta_path = fasta_path.resolve()
     
     command = [
-        "biolib",
+        executable,
         "run",
-        "DTU/DeepTMHMM:1.0.24",
+        model,
         "--fasta",
         str(absolute_fasta_path),
     ]
@@ -31,6 +35,7 @@ def run_deeptmhmm_bulk(fasta_path: Path, output_dir: Path):
             cwd=output_dir,
             check=True,
             text=True,
+            timeout=timeout,
         )
         print("[SUCCESS] DeepTMHMM bulk run completed successfully!")
     except subprocess.CalledProcessError as e:
@@ -105,15 +110,20 @@ def parse_tmhmm_output(output_dir: Path, final_csv_path: Path, strong_binders_pa
     print(f"[SUCCESS] Projected topology CSV successfully written with explicit 'peptide' column at: {final_csv_path}")
 
 def main():
-    if len(sys.argv) < 3:
-        print("Usage: python deeptmhmm_batch.py <input_fasta> <output_topology_csv> [optional_strong_binders_csv]")
-        sys.exit(1)
-
-    fasta_path = Path(sys.argv[1])
-    output_csv_path = Path(sys.argv[2])
-    
-    # Check for optional binder path to map coordinates accurately
-    strong_binders_path = Path(sys.argv[3]) if len(sys.argv) > 3 else Path("data/align/vp2_strong_binders.csv")
+    parser = argparse.ArgumentParser()
+    parser.add_argument("input_fasta")
+    parser.add_argument("output_topology_csv")
+    parser.add_argument("strong_binders_csv", nargs="?")
+    parser.add_argument("--config", default=None)
+    args = parser.parse_args()
+    config = load_config(args.config)
+    fasta_path = resolve_path(args.input_fasta, config)
+    output_csv_path = resolve_path(args.output_topology_csv, config)
+    strong_binders_path = (
+        resolve_path(args.strong_binders_csv, config)
+        if args.strong_binders_csv
+        else resolve_path(config["paths"]["mhc1_predictions_csv"], config)
+    )
     if not strong_binders_path.exists():
         strong_binders_path = None
 
@@ -129,7 +139,14 @@ def main():
         sys.exit(1)
 
     # Execute BioLib calculation layer
-    run_deeptmhmm_bulk(fasta_path, result_dir)
+    tool_config = config["tools"]["deeptmhmm"]
+    run_deeptmhmm_bulk(
+        fasta_path,
+        result_dir,
+        configured_tool(config, "deeptmhmm"),
+        tool_config["model"],
+        tool_config["timeout_seconds"],
+    )
     
     # Process and restructure the mapping arrays
     parse_tmhmm_output(result_dir, output_csv_path, strong_binders_path)

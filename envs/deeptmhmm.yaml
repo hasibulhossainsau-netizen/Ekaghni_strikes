@@ -6,6 +6,7 @@ channels:
   - defaults
 dependencies:
   - python=3.10
+  - pyyaml
   - pytorch::pytorch
   - biopython>=1.80
   - pandas

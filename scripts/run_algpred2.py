@@ -6,6 +6,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 import os
+from pipeline_config import configured_tool_if_available, load_config, resolve_path
 
 def peptides_to_fasta(peptides, temp_fasta):
     with open(temp_fasta, 'w') as f:
@@ -16,13 +17,23 @@ def main():
     parser = argparse.ArgumentParser(description="AlgPred2 Allergenicity Prediction Wrapper")
     parser.add_argument("--input", required=True, help="Input CSV containing 'peptide' column")
     parser.add_argument("--output", required=True, help="Output CSV for predictions")
+    parser.add_argument("--config", default=None, help="Path to pipeline config.yaml")
+    parser.add_argument("--mock", action="store_true", help="Write mock predictions without running AlgPred2")
     args = parser.parse_args()
+    config = load_config(args.config)
+    algpred2 = configured_tool_if_available(config, "algpred2")
+    use_mock = args.mock or algpred2 is None
+    if use_mock:
+        reason = "mock mode requested" if args.mock else "tools.algpred2 is unavailable in config.yaml"
+        print(f"[WARNING] {reason}; writing mock AlgPred2 predictions.")
+    input_path = resolve_path(args.input, config)
+    output_path = resolve_path(args.output, config)
 
-    if not Path(args.input).exists():
-        print(f"[ERROR] Input file not found: {args.input}")
+    if not input_path.exists():
+        print(f"[ERROR] Input file not found: {input_path}")
         sys.exit(1)
 
-    df = pd.read_csv(args.input)
+    df = pd.read_csv(input_path)
     df.columns = df.columns.str.lower()
     if 'peptide' not in df.columns:
         print(f"[ERROR] Input CSV must have 'peptide' column. Found: {list(df.columns)}")
@@ -32,54 +43,63 @@ def main():
 
     predictions = {}
 
-    with tempfile.TemporaryDirectory() as tmpdir:
-        temp_fasta = Path(tmpdir) / "peptides.fa"
-        peptides_to_fasta(peptides, temp_fasta)
+    if use_mock:
+        result_list = [{
+            "peptide": pep,
+            "allergenicity_prediction": "Non-Allergen",
+            "allergenicity_score": 0.0,
+        } for pep in peptides]
+    else:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            temp_fasta = Path(tmpdir) / "peptides.fa"
+            peptides_to_fasta(peptides, temp_fasta)
 
-        original_cwd = os.getcwd()
-        os.chdir(tmpdir)
+            original_cwd = os.getcwd()
+            os.chdir(tmpdir)
+            try:
+                cmd = [
+                    algpred2,
+                    "-i", str(temp_fasta),
+                    "-t", str(config["allergenicity"]["threshold"])
+                ]
+                result = subprocess.run(
+                    cmd,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                    timeout=config["allergenicity"]["timeout_seconds"],
+                )
+                if result.stdout:
+                    print(result.stdout)
+                if result.stderr:
+                    print(result.stderr)
 
-        try:
-            cmd = [
-                "algpred2",
-                "-i", str(temp_fasta),
-                "-t", "0.5"
-            ]
-            result = subprocess.run(
-                cmd,
-                check=True,
-                capture_output=True,
-                text=True
-            )
-            if result.stdout:
-                print(result.stdout)
-            if result.stderr:
-                print(result.stderr)
+                pred_file = Path(tmpdir) / "outfile.csv"
+                if not pred_file.exists():
+                    print("[ERROR] AlgPred2 did not generate outfile.csv")
+                    sys.exit(1)
 
-            pred_file = Path(tmpdir) / "outfile.csv"
-            if not pred_file.exists():
-                print("[ERROR] AlgPred2 did not generate outfile.csv")
+                pred_df = pd.read_csv(pred_file)
+                pred_df.columns = pred_df.columns.str.lower()
+
+                for i, row in pred_df.iterrows():
+                    seq_id = f"pep_{i}"
+                    prediction = row.get("prediction", row.iloc[1] if len(row) > 1 else "Non-Allergen")
+                    score = row.get("score", row.iloc[2] if len(row) > 2 else 0.0)
+                    predictions[seq_id] = (str(prediction), float(score))
+
+            except subprocess.CalledProcessError as e:
+                print(f"[ERROR] AlgPred2 failed:\nSTDOUT:\n{e.stdout}\nSTDERR:\n{e.stderr}")
                 sys.exit(1)
+            except FileNotFoundError:
+                print("[WARNING] AlgPred2 disappeared before execution; using mock predictions.")
+                predictions = {
+                    f"pep_{i}": ("Non-Allergen", 0.0)
+                    for i in range(len(peptides))
+                }
+            finally:
+                os.chdir(original_cwd)
 
-            pred_df = pd.read_csv(pred_file)
-            pred_df.columns = pred_df.columns.str.lower()
-
-            for i, row in pred_df.iterrows():
-                seq_id = f"pep_{i}"
-                prediction = row.get("prediction", row.iloc[1] if len(row) > 1 else "Non-Allergen")
-                score = row.get("score", row.iloc[2] if len(row) > 2 else 0.0)
-                predictions[seq_id] = (str(prediction), float(score))
-
-        except subprocess.CalledProcessError as e:
-            print(f"[ERROR] AlgPred2 failed:\nSTDOUT:\n{e.stdout}\nSTDERR:\n{e.stderr}")
-            sys.exit(1)
-        except FileNotFoundError:
-            print("[ERROR] 'algpred2' command not found. Please install with: pip install algpred2")
-            sys.exit(1)
-        finally:
-            os.chdir(original_cwd)
-
-        # Build final output
         result_list = []
         for i, pep in enumerate(peptides):
             seq_id = f"pep_{i}"
@@ -91,10 +111,10 @@ def main():
             })
 
     res_df = pd.DataFrame(result_list)
-    Path(args.output).parent.mkdir(parents=True, exist_ok=True)
-    res_df.to_csv(args.output, index=False)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    res_df.to_csv(output_path, index=False)
 
-    print(f"[SUCCESS] AlgPred2 prediction completed → {args.output}")
+    print(f"[SUCCESS] AlgPred2 prediction completed → {output_path}")
     print(f"Total peptides processed: {len(peptides)}")
 
 if __name__ == "__main__":

@@ -1,0 +1,17 @@
+.git
+.snakemake
+__pycache__
+*.py[cod]
+*.log
+logs
+results
+data/fasta/*
+!data/fasta/test_sample.fasta
+data/fasta_cleaned
+data/protein
+data/align
+data/blast
+data/MHC_I
+data/reference
+tools
+external-tools

@@ -2,6 +2,7 @@
 import argparse
 import pandas as pd
 import sys
+from pipeline_config import load_config, resolve_path
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Ensemble Immunogenicity Scoring Framework v2 (IEDB Integrated)")
@@ -9,9 +10,10 @@ def parse_args():
     parser.add_argument("--processing", required=True, help="Path to IEDB MHC-I processing CSV")
     parser.add_argument("--breed-weights", required=True, help="Path to breed weights config CSV")
     parser.add_argument("--output", required=True, help="Path to save ensemble immunogenicity output CSV")
-    parser.add_argument("--weight-mhc2", type=float, default=0.40, help="Weight for MHC-II predictions")
-    parser.add_argument("--weight-processing", type=float, default=0.35, help="Weight for MHC-I processing score")
-    parser.add_argument("--weight-population", type=float, default=0.25, help="Weight for Breed Population/Allele coverage")
+    parser.add_argument("--weight-mhc2", type=float, default=None, help="Weight for MHC-II predictions")
+    parser.add_argument("--weight-processing", type=float, default=None, help="Weight for MHC-I processing score")
+    parser.add_argument("--weight-population", type=float, default=None, help="Weight for Breed Population/Allele coverage")
+    parser.add_argument("--config", default=None, help="Path to pipeline config.yaml")
     return parser.parse_args()
 
 
@@ -27,6 +29,14 @@ def standardize_peptide_column(df):
 
 def main():
     args = parse_args()
+    config = load_config(args.config)
+    args.mhc2_scores = resolve_path(args.mhc2_scores, config)
+    args.processing = resolve_path(args.processing, config)
+    args.breed_weights = resolve_path(args.breed_weights, config)
+    args.output = resolve_path(args.output, config)
+    args.weight_mhc2 = args.weight_mhc2 if args.weight_mhc2 is not None else config["ensemble"]["weight_mhc2"]
+    args.weight_processing = args.weight_processing if args.weight_processing is not None else config["ensemble"]["weight_processing"]
+    args.weight_population = args.weight_population if args.weight_population is not None else config["ensemble"]["weight_population_coverage"]
     
     try:
         mhc2_df = pd.read_csv(args.mhc2_scores)

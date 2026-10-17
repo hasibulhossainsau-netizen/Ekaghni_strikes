@@ -1,14 +1,21 @@
 #!/usr/bin/env python3
-import sys
+import argparse
 import subprocess
-import yaml
 from pathlib import Path
 from Bio import SeqIO
+from pipeline_config import configured_tool, load_config, resolve_path
 
-def run_blastn(query_fasta, ref_db):
+
+def run_blastn(
+    query_fasta, ref_db, blastn, evalue, max_target_seqs, min_identity, timeout
+):
     outfmt = "6 qseqid sseqid pident length qstart qend sstart send evalue sstrand"
-    cmd = ["blastn", "-query", str(query_fasta), "-db", str(ref_db), "-outfmt", outfmt, "-max_target_seqs", "1", "-evalue", "1e-5"]
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    cmd = [
+        blastn, "-query", str(query_fasta), "-db", str(ref_db),
+        "-outfmt", outfmt, "-max_target_seqs", str(max_target_seqs),
+        "-evalue", str(evalue), "-perc_identity", str(min_identity)
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
     if result.returncode != 0:
         raise RuntimeError(f"BLASTN error: {result.stderr}")
     lines = result.stdout.strip().split("\n")
@@ -18,26 +25,33 @@ def run_blastn(query_fasta, ref_db):
     return None
 
 def main():
-    PROJECT_ROOT = Path(__file__).parent.parent
-    DATA_DIR = PROJECT_ROOT / "data"
-    FASTA_DIR = DATA_DIR / "fasta"
-    
-    with open(PROJECT_ROOT / "config.yaml", "r") as c_file:
-        config = yaml.safe_load(c_file)
-    
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--config", default=None, help="Path to pipeline config.yaml")
+    args = parser.parse_args()
+
+    config = load_config(args.config)
     samples = config["samples"]
     ref_genome_name = Path(config["reference"]["genome"]).stem
-
-    ref_fasta = DATA_DIR / "reference" / f"{ref_genome_name}.fasta"
+    fasta_dir = resolve_path(config["paths"]["raw_genomes"])
+    ref_fasta = resolve_path(config["reference"]["genome"])
     if not ref_fasta.exists():
-        ref_fasta = FASTA_DIR / f"{ref_genome_name}.fasta"
+        ref_fasta = fasta_dir / f"{ref_genome_name}.fasta"
 
-    ref_db_prefix = FASTA_DIR / f"{ref_genome_name}_db"
-    input_files = [FASTA_DIR / f"{s}.fasta" for s in samples if s != ref_genome_name]
+    ref_db_prefix = resolve_path(config["paths"]["blast"]) / f"{ref_genome_name}_nucleotide_db"
+    input_files = [fasta_dir / f"{s}.fasta" for s in samples if s != ref_genome_name]
+    blastn = configured_tool(config, "blastn")
+    makeblastdb = configured_tool(config, "makeblastdb")
+    extraction = config["sequence_extraction"]
+    ref_db_prefix.parent.mkdir(parents=True, exist_ok=True)
 
     print("[*] Creating BLAST database...")
-    make_cmd = ["makeblastdb", "-in", str(ref_fasta), "-dbtype", "nucl", "-out", str(ref_db_prefix)]
-    subprocess.run(make_cmd, check=True, stdout=subprocess.DEVNULL)
+    make_cmd = [makeblastdb, "-in", str(ref_fasta), "-dbtype", "nucl", "-out", str(ref_db_prefix)]
+    subprocess.run(
+        make_cmd,
+        check=True,
+        stdout=subprocess.DEVNULL,
+        timeout=extraction["timeout_seconds"],
+    )
 
     for query_file in input_files:
         if not query_file.exists():
@@ -46,7 +60,15 @@ def main():
 
         print(f"[*] processing: {query_file.name}")
         try:
-            blast_result = run_blastn(query_file, ref_db_prefix)
+            blast_result = run_blastn(
+                query_file,
+                ref_db_prefix,
+                blastn,
+                extraction["evalue"],
+                extraction["max_target_seqs"],
+                extraction["min_identity"],
+                extraction["timeout_seconds"],
+            )
             if blast_result is None:
                 print(f"[-] {query_file.name}: No hit was found against VP2")
                 continue
@@ -59,15 +81,18 @@ def main():
             start_idx = min(qstart, qend) - 1
             end_idx = max(qstart, qend)
             
-            if strand == "plus" or strand == "plus":
+            if strand == "plus":
                 vp2_nt = record.seq[start_idx:end_idx]
             else:
+                if not extraction["keep_reverse_complement"]:
+                    print(f"[-] {query_file.name}: Reverse-strand hit skipped by configuration")
+                    continue
                 vp2_nt = record.seq[start_idx:end_idx].reverse_complement()
 
             vp2_protein = vp2_nt.translate()
             protein_str = str(vp2_protein).rstrip('*')
 
-            out_file = FASTA_DIR / f"{query_file.stem}_VP2.fasta"
+            out_file = fasta_dir / f"{query_file.stem}_VP2.fasta"
             header = f"{query_file.stem}_VP2"
             
             with open(out_file, "w") as f:
@@ -78,7 +103,7 @@ def main():
             print(f"[x] Error {query_file.name}: {e}")
     for ext in [".nhr", ".nin", ".nsq"]:
         try:
-            (ref_db_prefix.with_suffix(ext)).unlink()
+            Path(f"{ref_db_prefix}{ext}").unlink()
         except OSError:
             pass
 

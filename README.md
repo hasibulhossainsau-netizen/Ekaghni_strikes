@@ -1,5 +1,6 @@
 # Ekaghni_strikes: CPV2 Canine Vaccine Design Pipeline
 
+[![CI](https://github.com/hasibulhossainsau-netizen/Ekaghni_strikes/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/hasibulhossainsau-netizen/Ekaghni_strikes/actions/workflows/ci.yml)
 [![Snakemake](https://img.shields.io/badge/snakemake-≥7.0-brightgreen)](https://snakemake.readthedocs.io)
 [![Python](https://img.shields.io/badge/python-3.10-blue)](https://www.python.org/)
 [![Pipeline Version](https://img.shields.io/badge/version-0.1.0-orange)](https://github.com/hasibulhossainsau-netizen/Ekaghni_strikes)
@@ -118,8 +119,9 @@ These tools **cannot** be installed via Conda and must be set up manually before
 - Download from [DTU Health Tech](https://services.healthtech.dtu.dk/services/NetMHCpan-4.1/)
 - After extracting, edit the launch script to set `NMHOME`:
 ```bash
-# Inside netMHCpan-4.1/netMHCpan, locate and set:
-setenv NMHOME /home/your_username/netMHCpan-4.1
+# Inside the NetMHCpan launcher, ensure NMHOME points to the extracted
+# NetMHCpan installation directory.
+setenv NMHOME /path/to/netMHCpan-4.1
 ```
 
 **2. ADFRsuite v1.1dev** *(required only when `docking.tool: "adcp"` is set)*
@@ -159,10 +161,13 @@ data/fasta/
 └── PV611247.fasta
 ```
 
-Place the canine reference proteome at:
+Place the canine reference proteome at the configured path:
 ```
 data/reference/dog_proteome.fa
 ```
+
+The repository includes a tiny synthetic genome at `data/fasta/test_sample.fasta`
+for checking workflow setup. It is only a smoke-test fixture, not biological input.
 
 ### Step 3: Place MHC structural data *(ADCP docking only)*
 
@@ -179,27 +184,39 @@ data/MHC_I/
 
 ### Step 4: Configure paths in `config.yaml`
 
-Update the following paths to match your system (see [Configuration Guide](#configuration-guide) for full details):
+Configure executable paths and database locations in `config.yaml`. Relative paths are resolved from the repository root, and bare executable names are looked up on `PATH` (including the Conda environment):
 
 ```yaml
-tcell_epitope:
-  netmhcpan_path: "/home/YOUR_USERNAME/netMHCpan-4.1/netMHCpan"
+tools:
+  netmhcpan:
+    path: "/path/to/netMHCpan-4.1/netMHCpan"
+  bepipred3:
+    path: "/path/to/bepipred3_CLI.py"
+  prepare_receptor:
+    path: "/path/to/ADFRsuite/bin/prepare_receptor"
+  prepare_ligand:
+    path: "/path/to/ADFRsuite/bin/prepare_ligand"
+  agfr:
+    path: "/path/to/ADFRsuite/bin/agfr"
+  adcp:
+    path: "/path/to/ADFRsuite/bin/adcp"
 
-bcell_epitope:
-  script_path: "/path/to/bepipred3_CLI.py"
-
-docking:
-  adfr_suite_path: "/home/YOUR_USERNAME/ADFRsuite_x86_64Linux_1.1dev/ADFRsuite-1.1dev/bin"
+databases:
+  dog_proteome_fasta: "data/reference/dog_proteome.fa"
+  dog_blast_db: "data/reference/dog_db"
 ```
 
 ### Step 5: Install Conda environments
 
-Let Snakemake manage environments automatically (recommended):
+Run the fixture-based DAG check, then verify the workflow environment declarations:
 
 ```bash
-snakemake --use-conda --cores 4 -n   # dry run first to verify
-snakemake --use-conda --cores 4
+make smoke-test
+make check-env
 ```
+
+After placing real input genomes and configuring external tools, run the pipeline
+with `make run`. Snakemake creates the per-rule Conda environments automatically.
 
 Or install individual environments manually:
 
@@ -210,11 +227,64 @@ for env in blast alignment netmhcpan iedb_tools toxinpred3 algpred2 \
 done
 ```
 
+### Quick workflow checks
+
+```bash
+make smoke-test  # Uses the bundled fixture and an isolated temporary config/output tree.
+make check-env   # Checks the workflow driver and required packages declared per rule env.
+make run         # Checks dependencies, then executes Snakemake with --use-conda.
+```
+
+The smoke test performs a complete Snakemake DAG dry run only; it does not launch
+predictors, contact external services, or create pipeline outputs. The dependency
+check verifies driver prerequisites and confirms that workflow environments declare
+the Python packages used by their scripts (including Biopython); `make run` lets
+Snakemake provision those per-rule environments from `envs/`.
+
+Run `make mock-test` to exercise the external-predictor fallback output files and
+their immediate downstream parsers. It requires the workflow Python packages in
+the active interpreter. Docker Compose's default smoke mode runs both the DAG dry
+run and this mock-predictor check.
+
+NetMHCpan, BepiPred 3, ToxinPred3, AlgPred2, and ADFRsuite wrappers accept
+`--mock`. They also switch to mock outputs with a warning when the configured
+executable is absent. These deterministic placeholder scores let test workflows
+continue, but are not scientific predictions and must not be used to interpret
+or report biological results.
+
+### Run with Docker Compose
+
+Docker Compose provides a prebuilt runtime containing Snakemake, the workflow's
+Python packages, BLAST+, and MAFFT. No local Python, Conda, or bioinformatics
+packages are needed. By default, Compose builds the image and runs the safe smoke
+test:
+
+```bash
+docker-compose up --build
+```
+
+To execute the full pipeline instead:
+
+```bash
+PIPELINE_MODE=full docker-compose up --build
+```
+
+Full mode runs against the repository's `config.yaml`, so provide the configured
+genomes under `data/fasta/` and the canine proteome at the configured database
+path. Manually licensed or downloaded tools (NetMHCpan, BepiPred 3.0, and
+ADFRsuite when using local ADCP docking) are not bundled. Put them in `tools/`
+or a host directory and set their container-visible paths in `config.yaml`.
+The optional `EXTERNAL_TOOLS_DIR` Compose variable mounts a host tools directory
+read-only at `/opt/external-tools`; paths in the config must use that container
+path, not a host-only absolute path. Generated files are written to the mounted
+repository. For non-default host account IDs, set `LOCAL_UID` and `LOCAL_GID`
+when invoking Compose so generated files have the expected ownership.
+
 ---
 
 ## Configuration Guide
 
-All parameters are controlled via `config.yaml`. Key sections explained below.
+All executable paths, database locations, and pipeline parameters are controlled via `config.yaml`. The in-repository Python scripts accept `--config` (defaulting to the repository's `config.yaml`), and the workflow passes it explicitly. Relative paths are rooted at the repository. The `tools` section supports either an explicit `path` or a bare `command` resolved through `PATH`; configure NetMHCpan and the ADFRsuite executables explicitly when they are not available on `PATH`.
 
 ### Docking Engine Toggle
 
@@ -275,6 +345,8 @@ host_homology:
     coverage: 70       # Query coverage % threshold
     evalue: 1e-3
 ```
+
+These three thresholds are applied to BLASTp results and control host-hit exclusion.
 
 ### Ranking Weights
 
@@ -453,12 +525,11 @@ Consensus overlapping regions and top-ranked epitopes from all three classes are
 
 ### `FileNotFoundError` for `netMHCpan`
 
-**Cause:** The `netmhcpan_path` in `config.yaml` is incorrect or the `NMHOME` variable inside the script is not set.
+**Cause:** `tools.netmhcpan.path` in `config.yaml` is empty or points to an invalid executable, or `NMHOME` inside the NetMHCpan installation is not set to its installation directory.
 
 ```bash
-# Verify the binary is executable and NMHOME is set correctly
-head -20 ~/netMHCpan-4.1/netMHCpan   # Look for setenv NMHOME line
-chmod +x ~/netMHCpan-4.1/netMHCpan
+# Verify that the executable configured as tools.netmhcpan.path is executable
+test -x /path/to/netMHCpan-4.1/netMHCpan
 ```
 
 ---

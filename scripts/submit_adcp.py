@@ -5,18 +5,21 @@ import argparse
 import subprocess
 import pandas as pd
 import shutil
+from pipeline_config import configured_tool_if_available, load_config, resolve_path
 
 def parse_arguments():
     parser = argparse.ArgumentParser(description="Automated High-Throughput Batch Screening via ADCP")
     parser.add_argument("--csv", required=True, help="Path to filtered_mhc1_epitopes.csv")
     parser.add_argument("--output", required=True, help="Path to write the final adcp_screening_summary.txt")
-    parser.add_argument("--bin-path", required=True, help="Path to ADFRsuite bin directory")
-    parser.add_argument("--replicas", type=int, default=40, help="Number of independent GA runs (-N)")
-    parser.add_argument("--steps", type=int, default=1000000, help="Number of search steps per run (-n)")
-    parser.add_argument("--threads", type=int, default=4, help="Number of CPU cores to assign per run (-c)")
+    parser.add_argument("--bin-path", help="Optional ADFRsuite bin directory override")
+    parser.add_argument("--replicas", type=int, help="Number of independent GA runs (-N)")
+    parser.add_argument("--steps", type=int, help="Number of search steps per run (-n)")
+    parser.add_argument("--threads", type=int, help="Number of CPU cores to assign per run (-c)")
+    parser.add_argument("--config", default=None, help="Path to pipeline config.yaml")
+    parser.add_argument("--mock", action="store_true", help="Write mock docking results without running ADCP")
     return parser.parse_args()
 
-def extract_scores_from_output(output_prefix):
+def extract_scores_from_output(output_prefix, score_cutoff):
     """
     Parses ADCP output format to extract the best binding energy (totalE)
     by checking the generated .pdb and .out replica files.
@@ -69,7 +72,7 @@ def extract_scores_from_output(output_prefix):
                     for p in parts:
                         try:
                             val = float(p.strip())
-                            if val < 50.0: 
+                            if val < score_cutoff:
                                 if best_score is None or val < best_score:
                                     best_score = val
                         except ValueError:
@@ -81,42 +84,65 @@ def extract_scores_from_output(output_prefix):
 
 def main():
     args = parse_arguments()
+    config = load_config(args.config)
+    args.csv = resolve_path(args.csv, config)
+    args.output = resolve_path(args.output, config)
+    args.replicas = args.replicas if args.replicas is not None else config["docking"]["replicas"]
+    args.steps = args.steps if args.steps is not None else config["docking"]["steps"]
+    args.threads = args.threads if args.threads is not None else config["docking"]["threads"]
     
     # 1. Validate inputs
     if not os.path.exists(args.csv):
         print(f"[-] Error: Input epitope CSV not found at {args.csv}")
         sys.exit(1) 
         
-    adcp_executable = os.path.join(args.bin_path, "adcp")
-    if not os.path.exists(adcp_executable):
-        print(f"[-] Error: adcp binary not found at path: {adcp_executable}")
-        sys.exit(1)
+    adcp_executable = (
+        os.path.join(args.bin_path, "adcp")
+        if args.bin_path
+        else configured_tool_if_available(config, "adcp")
+    )
+    if args.bin_path and not (
+        os.path.isfile(adcp_executable) and os.access(adcp_executable, os.X_OK)
+    ):
+        adcp_executable = None
+    use_mock = args.mock or adcp_executable is None
+    if use_mock:
+        reason = "mock mode requested" if args.mock else "tools.adcp is unavailable in config.yaml"
+        print(f"[WARNING] {reason}; generating mock ADCP screening results.")
 
     # 2. Load the pipeline-generated epitopes
     try:
         df = pd.read_csv(args.csv)
         seq_col = [col for col in df.columns if col.lower() in ['sequence', 'peptide', 'epitope']][0]
-        epitopes = df[seq_col].dropna().unique().tolist()[:5]
+        epitopes = df[seq_col].dropna().unique().tolist()[
+            :config["docking"]["max_epitopes"]
+        ]
         print(f"[+] Loaded {len(epitopes)} unique target epitopes for screening.")
     except Exception as e:
         print(f"[-] Error parsing CSV file columns: {e}")
         sys.exit(1)
 
     # 3. Discover generated grid targets in the data directory
-    grid_dir = "data/MHC_I"
-    if not os.path.exists(grid_dir):
-        print(f"[-] Error: Grid data storage path does not exist: {grid_dir}")
-        sys.exit(1)
-        
-    grid_files = [f for f in os.listdir(grid_dir) if f.endswith("_receptor.trg")]
+    grid_dir = str(resolve_path(config["paths"]["mhc_structures"], config))
+    grid_files = (
+        [f for f in os.listdir(grid_dir) if f.endswith("_receptor.trg")]
+        if os.path.isdir(grid_dir)
+        else []
+    )
     if not grid_files:
-        print("[-] Error: No compiled receptor grids (*_receptor.trg) discovered.")
-        sys.exit(1)
+        if use_mock:
+            grid_files = [
+                f"{receptor}_receptor.trg"
+                for receptor in config["docking"]["receptors"]
+            ]
+        else:
+            print("[-] Error: No compiled receptor grids (*_receptor.trg) discovered.")
+            sys.exit(1)
         
     print(f"[+] Discovered {len(grid_files)} target receptor structural grids.")
 
     # Prepare work space root directory
-    screening_root = "results/docking/virtual_screening"
+    screening_root = str(resolve_path(config["paths"]["docking_screening"], config))
     os.makedirs(screening_root, exist_ok=True)
     
     summary_results = []
@@ -128,13 +154,22 @@ def main():
         
         # Localize target grid to run path to prevent structural parsing crashes
         local_trg_path = os.path.join(screening_root, grid_file)
-        shutil.copy2(src_trg_path, local_trg_path)
+        if not use_mock:
+            shutil.copy2(src_trg_path, local_trg_path)
         
         for pep in epitopes:
             output_name = f"screening_{receptor_id}_{pep}"
             output_prefix = os.path.join(screening_root, output_name)
             
             print(f"\n[Running] Target: {receptor_id} | Peptide: {pep}")
+            if use_mock:
+                summary_results.append({
+                    "Receptor": receptor_id,
+                    "Peptide": pep,
+                    "Affinity_Score": -1.0,
+                    "Status": "Mocked"
+                })
+                continue
             
             cmd = [
                 adcp_executable,
@@ -158,7 +193,9 @@ def main():
                 )
                 
                 # Extract structural score
-                top_score = extract_scores_from_output(output_prefix)
+                top_score = extract_scores_from_output(
+                    output_prefix, config["docking"]["score_cutoff"]
+                )
                 print(f"[Success] {receptor_id} + {pep} -> Top Binding Energy: {top_score} kcal/mol")
                 summary_results.append({
                     "Receptor": receptor_id,
@@ -176,9 +213,17 @@ def main():
                     "Affinity_Score": "N/A",
                     "Status": f"Failed: {str(e)}"
                 })
+            except FileNotFoundError:
+                print("[WARNING] ADCP disappeared before execution; recording a mock screening result.")
+                summary_results.append({
+                    "Receptor": receptor_id,
+                    "Peptide": pep,
+                    "Affinity_Score": -1.0,
+                    "Status": "Mocked"
+                })
                 
         # Cleanup localized target layout files when target receptor batch finishes
-        if os.path.exists(local_trg_path):
+        if not use_mock and os.path.exists(local_trg_path):
             os.remove(local_trg_path)
 
     # 5. Write the final master execution log requested by Snakemake's rule all

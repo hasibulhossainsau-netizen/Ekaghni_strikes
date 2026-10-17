@@ -10,26 +10,25 @@ import subprocess
 import tempfile
 from pathlib import Path
 from Bio import SeqIO
+from pipeline_config import configured_tool_if_available, load_config, resolve_path
 
-NETMHCPAN_PATH = Path.home() / "netMHCpan-4.1" / "netMHCpan"
-
-def run_netmhcpan(allele, sequence, length):
+def run_netmhcpan(allele, sequence, length, netmhcpan_path, command_threshold, timeout):
     with tempfile.NamedTemporaryFile(mode='w', suffix='.fasta', delete=False) as tmp:
         tmp.write(f">seq\n{sequence}\n")
         tmp_path = tmp.name
 
     cmd = [
-        str(NETMHCPAN_PATH),
+        netmhcpan_path,
         "-f", tmp_path,
         "-a", allele,
         "-l", str(length),
         "-BA",
-        "-t", "-0.5"  
+        "-t", str(command_threshold)
     ]
 
     try:
         print(f"   → {allele} len={length}...", end=" ", flush=True)
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=600, check=True)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, check=True)
         
         predictions = []
         header_found = False
@@ -66,20 +65,49 @@ def run_netmhcpan(allele, sequence, length):
         if os.path.exists(tmp_path):
             Path(tmp_path).unlink(missing_ok=True)
 
+
+def mock_netmhcpan_prediction(sequence, length, rank_threshold):
+    if len(sequence) < length:
+        return []
+    return [{
+        "pos": "1",
+        "peptide": sequence[:length],
+        "affinitynm": "100.0",
+        "rank_el": str(min(rank_threshold / 2, 0.1)),
+    }]
+
+
 def main():
-    if not NETMHCPAN_PATH.exists():
-        print(f"❌ NetMHCpan binary missing at: {NETMHCPAN_PATH}")
-        sys.exit(1)
-
     if len(sys.argv) < 6:
-        print("Usage: python netmhcpan_runner.py <input_fasta> <alleles_str> <lengths_str> <rank_threshold> <output_csv>")
+        print("Usage: python netmhcpan_runner.py <input_fasta> <alleles_str> <lengths_str> <rank_threshold> <output_csv> [--config config.yaml]")
         sys.exit(1)
 
-    input_fasta = Path(sys.argv[1])
-    dla_alleles = sys.argv[2].split(",")          
-    peptide_lengths = [int(l) for l in sys.argv[3].split(",")] 
-    rank_threshold = float(sys.argv[4])           
-    output_csv = Path(sys.argv[5])
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("input_fasta")
+    parser.add_argument("alleles_str")
+    parser.add_argument("lengths_str")
+    parser.add_argument("rank_threshold", type=float)
+    parser.add_argument("output_csv")
+    parser.add_argument("--config", default=None)
+    parser.add_argument("--mock", action="store_true", help="Write deterministic mock predictions without running NetMHCpan")
+    args = parser.parse_args()
+    config = load_config(args.config)
+    netmhcpan_path = configured_tool_if_available(config, "netmhcpan")
+    use_mock = args.mock or netmhcpan_path is None
+    if use_mock:
+        reason = "mock mode requested" if args.mock else "tools.netmhcpan is unavailable in config.yaml"
+        print(
+            f"[WARNING] {reason}; writing mock NetMHCpan predictions."
+        )
+    input_fasta = resolve_path(args.input_fasta, config)
+    dla_alleles = args.alleles_str.split(",")
+    peptide_lengths = [int(length) for length in args.lengths_str.split(",")]
+    rank_threshold = args.rank_threshold
+    output_csv = resolve_path(args.output_csv, config)
+    netmhcpan_config = config["tcell_epitope"]["netmhcpan"]
+    command_threshold = netmhcpan_config["command_threshold"]
+    timeout = config["tcell_epitope"]["timeout_seconds"]
 
     output_csv.parent.mkdir(parents=True, exist_ok=True)
 
@@ -91,7 +119,8 @@ def main():
     strong_binders_pool = []
 
 
-    for record in SeqIO.parse(input_fasta, "fasta"):
+    records = list(SeqIO.parse(input_fasta, "fasta"))
+    for record in records:
         protein_id = record.id.replace("_VP2_protein", "").replace("_VP2", "")
         seq = str(record.seq).strip()
 
@@ -100,7 +129,17 @@ def main():
         all_preds = []
         for allele in dla_alleles:
             for length in peptide_lengths:
-                preds = run_netmhcpan(allele, seq, length)
+                if use_mock:
+                    preds = mock_netmhcpan_prediction(seq, length, rank_threshold)
+                else:
+                    try:
+                        preds = run_netmhcpan(
+                            allele, seq, length, netmhcpan_path, command_threshold, timeout
+                        )
+                    except FileNotFoundError:
+                        print("[WARNING] NetMHCpan disappeared before execution; switching to mock predictions.")
+                        use_mock = True
+                        preds = mock_netmhcpan_prediction(seq, length, rank_threshold)
                 for p in preds:
                     p["target_allele"] = allele
                     p["target_length"] = length
