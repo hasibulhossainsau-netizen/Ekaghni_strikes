@@ -353,9 +353,6 @@ tcell_epitope:
 mhc2_epitope:
   # IEDB currently lacks supported canine DLA-II models.
   hla_surrogate_alleles: ["HLA-DRB1*01:01"]
-mhc1_processing:
-  # IEDB processing also uses human HLA-I surrogates; not canine allele calls.
-  hla_surrogate_alleles: ["HLA-A*02:01"]
 ```
 
 The HLA-I/II values above are computational surrogates because the corresponding
