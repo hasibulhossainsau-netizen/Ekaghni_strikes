@@ -2,6 +2,7 @@
 """Download configured CPV-2 accessions and the UniProt canine reference proteome."""
 
 import argparse
+import gzip
 import os
 import tempfile
 import time
@@ -16,7 +17,17 @@ from pipeline_config import load_config, resolve_path
 def validate_fasta(path):
     saw_header = False
     saw_residue = False
-    with path.open(encoding="utf-8") as fasta:
+    
+    opener = open
+    try:
+        with open(path, "rb") as f:
+            magic = f.read(2)
+        if magic == b"\x1f\x8b":
+            opener = gzip.open
+    except Exception:
+        pass
+
+    with opener(path, "rt", encoding="utf-8") as fasta:
         for line in fasta:
             stripped = line.strip()
             if stripped.startswith(">"):
@@ -38,7 +49,14 @@ def download_fasta(url, destination, force=False, attempts=3):
     for attempt in range(1, attempts + 1):
         temp_path = None
         try:
-            request = Request(url, headers={"User-Agent": "Ekaghni-strikes/0.3.0"})
+            # Added "Accept": "text/plain" so UniProt API returns proper FASTA text
+            request = Request(
+                url, 
+                headers={
+                    "User-Agent": "Ekaghni-strikes/0.3.0",
+                    "Accept": "text/plain"
+                }
+            )
             with urlopen(request, timeout=90) as response:
                 with tempfile.NamedTemporaryFile(
                     mode="wb", dir=destination.parent, delete=False
@@ -46,6 +64,18 @@ def download_fasta(url, destination, force=False, attempts=3):
                     temp_path = Path(temp_file.name)
                     while chunk := response.read(1024 * 1024):
                         temp_file.write(chunk)
+            
+            with open(temp_path, "rb") as f:
+                magic = f.read(2)
+            
+            if magic == b"\x1f\x8b":
+                decompressed_path = temp_path.with_suffix(".decompressed")
+                with gzip.open(temp_path, "rb") as f_in, open(decompressed_path, "wb") as f_out:
+                    while chunk := f_in.read(1024 * 1024):
+                        f_out.write(chunk)
+                temp_path.unlink()
+                temp_path = decompressed_path
+
             validate_fasta(temp_path)
             os.replace(temp_path, destination)
             print(f"[DOWNLOADED] {destination}")

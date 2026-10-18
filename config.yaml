@@ -336,7 +336,7 @@ data_sources:
   # NCBI nucleotide accession-to-FASTA endpoint; accessions come from samples.
   genome_url_template: "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=nuccore&id={accession}&rettype=fasta&retmode=text"
   # UniProt reference proteome for Canis lupus familiaris (UP000002254).
-  dog_proteome_url: "https://rest.uniprot.org/uniprotkb/stream?query=proteome:UP000002254&format=fasta"
+  dog_proteome_url: "https://ftp.uniprot.org/pub/databases/uniprot/current_release/knowledgebase/pan_proteomes/pp9612/pp9612.fasta.gz"
 
 # ==========================================================
 # REPORTING & VISUALIZATION
